@@ -1,1 +1,3 @@
-# vital-agent-resource-rest
+# Vital Agent Resource REST
+
+Vital Agent Resource REST
