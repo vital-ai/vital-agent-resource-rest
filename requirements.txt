@@ -1,5 +1,5 @@
 
-kgraphservice>=0.0.7
+kgraphservice>=0.0.6
 requests
 uvicorn[standard]==0.27.0.post1
 fastapi==0.109.2

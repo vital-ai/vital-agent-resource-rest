@@ -2,9 +2,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from vital_agent_resource_app.tools.tool_request import ToolRequest
-from vital_agent_resource_app.tools.weather_tool import WeatherTool
-from typing import Dict, Any
-
+from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
 
 app = FastAPI()
 

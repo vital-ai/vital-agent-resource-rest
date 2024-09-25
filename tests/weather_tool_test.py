@@ -1,5 +1,5 @@
 from vital_agent_resource_app.tools.tool_request import ToolRequest
-from vital_agent_resource_app.tools.weather_tool import WeatherTool
+from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
 
 
 def main():
@@ -7,7 +7,9 @@ def main():
 
     weather_tool = WeatherTool()
 
-    tool_request = ToolRequest()
+    data = {}
+
+    tool_request = ToolRequest(data)
 
     tool_response = weather_tool.handle_tool_request(tool_request)
 
