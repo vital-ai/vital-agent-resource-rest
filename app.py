@@ -12,6 +12,11 @@ tools_map = {
 }
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 @app.post("/tool")
 async def handle_tool_request(request: Request):
 
