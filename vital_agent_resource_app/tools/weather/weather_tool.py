@@ -11,14 +11,10 @@ class WeatherTool(AbstractTool):
 
     def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
 
-        tool_request = {
-            "location": "Your Location",
-            "latitude": 40.7128,
-            "longitude": -74.0060
-        }
+        request_data = tool_request.request_data
 
-        latitude = tool_request["latitude"]
-        longitude = tool_request["longitude"]
+        latitude = request_data["latitude"]
+        longitude = request_data["longitude"]
 
         weather_url = "https://api.open-meteo.com/v1/forecast"
 
@@ -29,6 +25,7 @@ class WeatherTool(AbstractTool):
             "apparent_temperature",
             "is_day",
             "precipitation",
+            "precipitation_probability",
             "cloud_cover",
             "wind_speed_10m",
             "wind_direction_10m",
@@ -42,7 +39,15 @@ class WeatherTool(AbstractTool):
             "apparent_temperature_max",
             "apparent_temperature_min",
             "sunrise",
-            "sunset"
+            "sunset",
+            "precipitation_sum",
+            "precipitation_hours",
+            "precipitation_probability_max",
+            "precipitation_probability_min",
+            "precipitation_probability_mean",
+            "daylight_duration",
+            "uv_index_max",
+            "wind_gusts_10m_max",
         ]
 
         params = {
@@ -57,6 +62,7 @@ class WeatherTool(AbstractTool):
         }
 
         try:
+            # print(params)
             response = requests.get(weather_url, params=params)
             print(f"GET: {response.url}")
             print(f"Response: {response.status_code}")

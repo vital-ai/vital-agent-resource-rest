@@ -7,3 +7,5 @@ class ToolResponse:
         return self.data
 
 
+# use definition in client
+

@@ -8,8 +8,10 @@ def main():
 
     payload = {
         "tool": "weather_tool",
-        "latitude": 40.7128,
-        "longitude": -74.0060
+        "tool_parameters": {
+            "latitude": 40.7128,
+            "longitude": -74.0060
+        }
     }
 
     response = requests.post(url, json=payload)

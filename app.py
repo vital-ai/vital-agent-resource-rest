@@ -32,7 +32,9 @@ async def handle_tool_request(request: Request):
     if not tool_instance:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
 
-    tool_request = ToolRequest(data=request_data)
+    tool_parameters = request_data.get("tool_parameters")
+
+    tool_request = ToolRequest(data=tool_parameters)
 
     response = tool_instance.handle_tool_request(tool_request)
 
