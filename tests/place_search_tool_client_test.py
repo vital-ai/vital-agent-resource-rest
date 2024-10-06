@@ -1,20 +1,16 @@
+from vital_agent_resource_app.tools.place_search.place_search_tool import PlaceSearchTool
 import requests
 
 
 def main():
-    print("Weather Tool Test")
+    print("Place Search Tool Test")
 
     url = "http://localhost:8008/tool"
 
     payload = {
-        "tool": "weather_tool",
+        "tool": "place_search_tool",
         "tool_parameters": {
-            "latitude": 40.7128,
-            "longitude": -74.0060,
-
-            # "include_previous": True
-            # "use_archive": True,
-            # "archive_date": "2020-12-25"
+            "place_search_string": "Philly"
         }
     }
 
@@ -27,4 +23,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

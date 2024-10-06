@@ -1,14 +1,31 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from vital_agent_resource_app.tools.place_search.place_search_tool import PlaceSearchTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
+from vital_agent_resource_app.utils.config_utils import ConfigUtils
 
 app = FastAPI()
 
 
+def get_tool_by_id(config_dict, tool_id):
+    tools = config_dict.get('vital_agent_resource_app', {}).get('tools', [])
+    for tool in tools:
+        if tool.get('tool_id') == tool_id:
+            return tool
+    return None
+
+
+config = ConfigUtils.load_config()
+
+weather_config = get_tool_by_id(config, 'weather_tool')
+
+place_search_config = get_tool_by_id(config, 'place_search_tool')
+
 tools_map = {
-    "weather_tool": WeatherTool()
+    "weather_tool": WeatherTool(weather_config),
+    "place_search_tool": PlaceSearchTool(place_search_config)
 }
 
 
