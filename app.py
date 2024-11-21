@@ -1,9 +1,12 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+from vital_agent_resource_app.tools.amazon_shopping.amazon_product_search_tool import AmazonProductSearchTool
 from vital_agent_resource_app.tools.place_search.place_search_tool import PlaceSearchTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
+from vital_agent_resource_app.tools.web_search.google_web_search_tool import GoogleWebSearchTool
 from vital_agent_resource_app.utils.config_utils import ConfigUtils
 
 app = FastAPI()
@@ -23,9 +26,15 @@ weather_config = get_tool_by_id(config, 'weather_tool')
 
 place_search_config = get_tool_by_id(config, 'place_search_tool')
 
+amazon_product_search_config = get_tool_by_id(config, 'amazon_product_search_tool')
+
+google_web_search_config = get_tool_by_id(config, 'google_web_search_tool')
+
 tools_map = {
     "weather_tool": WeatherTool(weather_config),
-    "place_search_tool": PlaceSearchTool(place_search_config)
+    "place_search_tool": PlaceSearchTool(place_search_config),
+    "amazon_product_search_tool": AmazonProductSearchTool(amazon_product_search_config),
+    "google_web_search_tool": GoogleWebSearchTool(google_web_search_config)
 }
 
 

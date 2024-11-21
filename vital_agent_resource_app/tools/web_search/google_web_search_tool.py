@@ -1,44 +1,43 @@
-import json
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
 import requests
+from serpapi import GoogleSearch
 
-class AmazonProductSearchTool(AbstractTool):
+class GoogleWebSearchTool(AbstractTool):
 
     def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
 
         request_data = tool_request.request_data
 
-        tool_response = self.amazon_product_search()
+        tool_response = self.google_web_search()
 
         return tool_response
 
-    def amazon_product_search(self):
+
+    def google_web_search(self):
 
         api_key = self.config.get("api_key", "")
 
         params = {
-            'api_key': api_key,
-            'type': 'search',
-            'amazon_domain': 'amazon.com',
-            'search_term': 'red dress'
+            "engine": "google",
+            "q": "Apple Cider",
+            "api_key": api_key
         }
 
         try:
+            search = GoogleSearch(params)
 
-            response = requests.get('https://api.rainforestapi.com/request', params)
+            if search.get_response().status_code == 200:
+                results = search.get_dict()
+                organic_results = results["organic_results"]
 
-            print(f"GET: {response.url}")
-            print(f"Response: {response.status_code}")
+                print(organic_results )
 
-            if response.status_code == 200:
-                response_content = response.json()
-                print(response_content)
-                tool_response = ToolResponse(data=response_content)
+                tool_response = ToolResponse(data=organic_results )
                 return tool_response
             else:
-                print(f"Error: {response.status_code}")
+                print(f"Error: {search.get_response().status_code}")
                 tool_response = ToolResponse(data={})
                 return tool_response
 
