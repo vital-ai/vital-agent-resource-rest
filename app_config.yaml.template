@@ -6,3 +6,5 @@ vital_agent_resource_app:
       api_key: "efgh5678"
     - tool_id: "tool_3"
       api_key: "ijkl91011"
+  runpod:
+    runpod_api_key: ""
