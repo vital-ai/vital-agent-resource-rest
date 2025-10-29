@@ -5,3 +5,13 @@ services:
     build: .
     ports:
       - "8008:8008"
+    env_file:
+      - .env
+    environment:
+      - JWT_ENABLED=${JWT_ENABLED}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - JWT_REQUIRED_CLAIMS=${JWT_REQUIRED_CLAIMS}
+      - JWT_TOKEN_EXPIRY_SECONDS=${JWT_TOKEN_EXPIRY_SECONDS}
+      - JWT_ISSUER=${JWT_ISSUER}
+      - JWT_AUDIENCE=${JWT_AUDIENCE}
+      - JWT_JWKS_URL=${JWT_JWKS_URL}

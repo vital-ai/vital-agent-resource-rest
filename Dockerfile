@@ -20,4 +20,4 @@ RUN chmod -R 755 /var/log/agentresourcerest
 # Make port 8008 available to the world outside this container
 EXPOSE 8008
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8008"]
+CMD ["uvicorn", "vital_agent_resource_app.app:app", "--host", "0.0.0.0", "--port", "8008"]

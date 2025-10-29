@@ -1,20 +1,43 @@
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
+from typing import List, Dict, Any
 import requests
 
 
 class WeatherTool(AbstractTool):
 
+    def get_examples(self) -> List[Dict[str, Any]]:
+        """Return list of example requests for Weather tool"""
+        return [
+            {
+                "tool": "weather_tool",
+                "tool_input": {
+                    "latitude": 40.7128,
+                    "longitude": -74.0060
+                }
+            },
+            {
+                "tool": "weather_tool",
+                "tool_input": {
+                    "latitude": 37.7749,
+                    "longitude": -122.4194,
+                    "include_previous": True
+                }
+            }
+        ]
+
     def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
-
-        request_data = tool_request.request_data
-
-        latitude = request_data["latitude"]
-        longitude = request_data["longitude"]
-        include_previous = request_data.get("include_previous", False)
-        use_archive = request_data.get("use_archive", False)
-        archive_date = request_data.get("archive_date", "")
+        import time
+        start_time = time.time()
+        
+        # Extract parameters from validated tool input
+        validated_input = tool_request.tool_input
+        latitude = validated_input.latitude
+        longitude = validated_input.longitude
+        include_previous = validated_input.include_previous or False
+        use_archive = validated_input.use_archive or False
+        archive_date = validated_input.archive_date or ""
 
         # include_previous
         # past_days=10
@@ -65,16 +88,22 @@ class WeatherTool(AbstractTool):
                 if response.status_code == 200:
                     response_content = response.json()
                     print(response_content)
-                    tool_response = ToolResponse(data=response_content)
-                    return tool_response
+                    
+                    # Create structured output using the registered model
+                    from vital_agent_resource_app.tools.weather.models import WeatherOutput, WeatherData
+                    weather_data = WeatherData(**response_content)
+                    tool_output = WeatherOutput(
+                        tool="weather_tool",
+                        weather_data=weather_data
+                    )
+                    
+                    return self._create_success_response(tool_output.dict(), start_time)
                 else:
                     print(f"Error: {response.status_code}")
-                    tool_response = ToolResponse(data={})
-                    return tool_response
+                    return self._create_error_response(f"Weather API error: {response.status_code}", start_time)
             except requests.exceptions.RequestException as e:
                 print(f"An error occurred: {e}")
-                tool_response = ToolResponse({})
-                return tool_response
+                return self._create_error_response(f"Request error: {str(e)}", start_time)
 
         # normal case
         weather_url = "https://api.open-meteo.com/v1/forecast"
@@ -134,16 +163,22 @@ class WeatherTool(AbstractTool):
             if response.status_code == 200:
                 response_content = response.json()
                 print(response_content)
-                tool_response = ToolResponse(data=response_content)
-                return tool_response
+                
+                # Create structured output using the registered model
+                from vital_agent_resource_app.tools.weather.models import WeatherOutput, WeatherData
+                weather_data = WeatherData(**response_content)
+                tool_output = WeatherOutput(
+                    tool="weather_tool",
+                    weather_data=weather_data
+                )
+                
+                return self._create_success_response(tool_output.dict(), start_time)
             else:
                 print(f"Error: {response.status_code}")
-                tool_response = ToolResponse(data={})
-                return tool_response
+                return self._create_error_response(f"Weather API error: {response.status_code}", start_time)
         except requests.exceptions.RequestException as e:
             print(f"An error occurred: {e}")
-            tool_response = ToolResponse({})
-            return tool_response
+            return self._create_error_response(f"Request error: {str(e)}", start_time)
 
 
 

@@ -8,7 +8,7 @@ def main():
 
     payload = {
         "tool": "weather_tool",
-        "tool_parameters": {
+        "tool_input": {
             "latitude": 40.7128,
             "longitude": -74.0060,
 

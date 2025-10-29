@@ -2,20 +2,19 @@ import requests
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vital_agent_resource_app.tools.place_search.place_search_tool import PlaceSearchTool
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def main():
-    print("Place Search Tool Test")
+    print("Google Address Validation Tool Test")
 
     url = "http://localhost:8008/tool"
 
     payload = {
-        "tool": "place_search_tool",
+        "tool": "google_address_validation_tool",
         "tool_input": {
-            "place_search_string": "Philly"
+            "address": "475 st marks broklyn 7a"
         }
     }
 

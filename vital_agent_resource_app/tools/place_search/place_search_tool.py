@@ -1,43 +1,52 @@
 import googlemaps
-from typing import List, Optional
-from typing_extensions import TypedDict
+from typing import List, Dict, Any
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
-
-
-class PlaceDetails(TypedDict):
-    name: str
-    address: str
-    place_id: str
-    latitude: Optional[float]
-    longitude: Optional[float]
-    business_status: Optional[str]
-    icon: Optional[str]
-    types: Optional[List[str]]
-    url: Optional[str]
-    vicinity: Optional[str]
-    formatted_phone_number: Optional[str]
-    website: Optional[str]
+from vital_agent_resource_app.tools.place_search.models import PlaceDetails
 
 
 class PlaceSearchTool(AbstractTool):
 
+    def get_examples(self) -> List[Dict[str, Any]]:
+        """Return list of example requests for Place Search tool"""
+        return [
+            {
+                "tool": "place_search_tool",
+                "tool_input": {
+                    "place_search_string": "restaurants near me"
+                }
+            },
+            {
+                "tool": "place_search_tool",
+                "tool_input": {
+                    "place_search_string": "Philly"
+                }
+            }
+        ]
+
     def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
-
-        request_data = tool_request.request_data
-
-        place_search_string = request_data["place_search_string"]
-
-        results = self.search_place(place_search_string)
-
-        results_dict = {
-            "place_search_results": results
-        }
-
-        tool_response = ToolResponse(data=results_dict)
-
-        return tool_response
+        import time
+        start_time = time.time()
+        
+        # Extract search string from validated tool input
+        validated_input = tool_request.tool_input
+        place_search_string = validated_input.place_search_string
+        
+        try:
+            results = self.search_place(place_search_string)
+            
+            # Create structured output using the registered model
+            from vital_agent_resource_app.tools.place_search.models import PlaceSearchOutput
+            tool_output = PlaceSearchOutput(
+                tool="place_search_tool",
+                results=results
+            )
+            
+            return self._create_success_response(tool_output.dict(), start_time)
+            
+        except Exception as e:
+            return self._create_error_response(str(e), start_time)
 
     def search_place(self, place_string: str) -> List[PlaceDetails]:
 
