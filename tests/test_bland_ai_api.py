@@ -12,12 +12,17 @@ from dotenv import load_dotenv
 def test_bland_ai_call():
     """Test initiating a call with the bland.ai API"""
     
-    # Load API key from .env file
+    # Load API key and phone number from .env file
     load_dotenv()
     api_key = os.getenv("BLAND_API_KEY")
+    test_phone = os.getenv("TEST_PHONE_NUMBER")
     
     if not api_key:
         print("Error: BLAND_API_KEY not found in .env file")
+        return
+    
+    if not test_phone:
+        print("Error: TEST_PHONE_NUMBER not found in .env file")
         return
     
     # API endpoint
@@ -31,7 +36,7 @@ def test_bland_ai_call():
     
     # Request payload
     payload = {
-        "phone_number": "+19179919685",  # Your phone number
+        "phone_number": test_phone,  # Phone number from environment
         # The task field contains the instructions for the AI agent
         "task": """You are Sarah from Customer Support at Acme Inc. calling to collect delivery information for order #ABC123. Use a friendly, professional tone.
 

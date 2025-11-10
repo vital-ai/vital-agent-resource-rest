@@ -8,6 +8,11 @@ from vital_agent_resource_app.tools.place_search.models import PlaceSearchInput
 from vital_agent_resource_app.tools.weather.models import WeatherInput
 from vital_agent_resource_app.tools.web_search.models import WebSearchInput
 from vital_agent_resource_app.tools.send_email.models import EmailInput
+from vital_agent_resource_app.tools.send_message.models import (
+    LoopLookupSingleInput, LoopLookupBulkInput, LoopLookupStatusInput,
+    LoopMessageSingleInput, LoopMessageGroupInput, LoopMessageAudioInput,
+    LoopMessageReactionInput, LoopMessageStatusInput
+)
 from vital_agent_resource_app.tools.tool_name_enum import ToolName
 
 # Type alias for tool input union
@@ -16,7 +21,15 @@ ToolInputType = Union[
     PlaceSearchInput, 
     WeatherInput,
     WebSearchInput,
-    EmailInput
+    EmailInput,
+    LoopLookupSingleInput,
+    LoopLookupBulkInput,
+    LoopLookupStatusInput,
+    LoopMessageSingleInput,
+    LoopMessageGroupInput,
+    LoopMessageAudioInput,
+    LoopMessageReactionInput,
+    LoopMessageStatusInput
 ]
 
 def _get_json_schema_extra(schema, model_type):

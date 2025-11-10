@@ -155,23 +155,188 @@ class LoopLookupRequest(BaseModel):
     }
 
 
+# ========================================
+# Loop Lookup Result Models (Based on Official API Documentation)
+# ========================================
+
+class AppleServiceLinks(BaseModel):
+    """Apple service deep links"""
+    facetime_audio: Optional[str] = Field(None, description="FaceTime audio deep link")
+    facetime: Optional[str] = Field(None, description="FaceTime video deep link")
+    tel: Optional[str] = Field(None, description="Phone call deep link")
+    imessage: Optional[str] = Field(None, description="iMessage deep link")
+    sms: Optional[str] = Field(None, description="SMS deep link")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "facetime_audio": "facetime-audio://+15551234567",
+                "facetime": "facetime://+15551234567",
+                "tel": "tel://+15551234567",
+                "imessage": "imessage://+15551234567",
+                "sms": "sms://+15551234567"
+            }
+        }
+    }
+
+
+class AppleServiceStatus(BaseModel):
+    """Apple service availability status"""
+    status: str = Field(..., description="Service status: available, unavailable, unknown")
+    date: Optional[str] = Field(None, description="Last known date of data (YYYY-MM-DD)")
+    links: Optional[AppleServiceLinks] = Field(None, description="Deep links for the service")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "status": "available",
+                "date": "2025-11-10",
+                "links": {
+                    "imessage": "imessage://+15551234567",
+                    "sms": "sms://+15551234567"
+                }
+            }
+        }
+    }
+
+
+class AppleServices(BaseModel):
+    """Apple services availability"""
+    facetime: Optional[AppleServiceStatus] = Field(None, description="FaceTime availability")
+    imessage: Optional[AppleServiceStatus] = Field(None, description="iMessage availability")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "facetime": {
+                    "status": "available",
+                    "date": "2025-11-10",
+                    "links": {
+                        "facetime_audio": "facetime-audio://+15551234567",
+                        "facetime": "facetime://+15551234567",
+                        "tel": "tel://+15551234567"
+                    }
+                },
+                "imessage": {
+                    "status": "available", 
+                    "date": "2025-11-10",
+                    "links": {
+                        "imessage": "imessage://+15551234567",
+                        "sms": "sms://+15551234567"
+                    }
+                }
+            }
+        }
+    }
+
+
+class CarrierInfo(BaseModel):
+    """Carrier information"""
+    carrier: Optional[str] = Field(None, description="Carrier name (e.g., Verizon)")
+    number_type: Optional[str] = Field(None, description="Number type: mobile, fixed_line, fixed_line_or_mobile")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "carrier": "Verizon",
+                "number_type": "fixed_line_or_mobile"
+            }
+        }
+    }
+
+
+class CountryInfo(BaseModel):
+    """Country information"""
+    flag: Optional[str] = Field(None, description="Country flag emoji")
+    iso2: Optional[str] = Field(None, description="ISO2 country code")
+    iso3: Optional[str] = Field(None, description="ISO3 country code")
+    name: Optional[str] = Field(None, description="Country name")
+    description: Optional[str] = Field(None, description="Region/state description")
+    numeric: Optional[int] = Field(None, description="Numeric country code")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "flag": "🇺🇸",
+                "iso2": "US",
+                "iso3": "USA",
+                "name": "United States",
+                "description": "New York",
+                "numeric": 840
+            }
+        }
+    }
+
+
+class PhoneFormat(BaseModel):
+    """Phone number formatting"""
+    e164: Optional[str] = Field(None, description="E164 format (+13231112233)")
+    international: Optional[str] = Field(None, description="International format (+1 323-111-2233)")
+    national: Optional[str] = Field(None, description="National format ((323) 111-2233)")
+    out_of_usa: Optional[str] = Field(None, description="Out of USA format (1 (323) 111-2233)")
+    rfc3966: Optional[str] = Field(None, description="RFC3966 format (tel:+1-323-111-2233)")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "e164": "+15551234567",
+                "international": "+1 555-123-4567",
+                "national": "(555) 123-4567",
+                "out_of_usa": "+1 555-123-4567",
+                "rfc3966": "tel:+1-555-123-4567"
+            }
+        }
+    }
+
+
+class LookupResultData(BaseModel):
+    """Structured lookup result data based on official API documentation"""
+    apple_services: Optional[AppleServices] = Field(None, description="Apple services availability")
+    carrier: Optional[CarrierInfo] = Field(None, description="Carrier information")
+    country: Optional[CountryInfo] = Field(None, description="Country information")
+    currencies: Optional[List[str]] = Field(None, description="Supported currencies")
+    format: Optional[PhoneFormat] = Field(None, description="Phone number formats")
+    time_zones: Optional[List[str]] = Field(None, description="Time zones")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "apple_services": {
+                    "imessage": {"status": "available", "date": "2025-11-10"},
+                    "facetime": {"status": "available", "date": "2025-11-10"}
+                },
+                "carrier": {"number_type": "fixed_line_or_mobile"},
+                "country": {"description": "New York", "flag": "🇺🇸", "iso2": "US"},
+                "currencies": ["USD", "USN"],
+                "format": {"e164": "+15551234567", "national": "(555) 123-4567"},
+                "time_zones": ["America/New_York"]
+            }
+        }
+    }
+
+
 class LoopLookupResult(BaseModel):
     """Lookup result data"""
     request_id: str = Field(..., description="Request identifier")
     status: str = Field(..., description="Request status (queued, processing, completed, canceled)")
     contact: Optional[str] = Field(None, description="Contact that was looked up")
-    result_v1: Optional[Dict[str, Any]] = Field(None, description="Lookup results when completed")
+    result_v1: Optional[LookupResultData] = Field(None, description="Structured lookup results when completed")
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "request_id": "2BC4FD6A-CE49-439F-81DF-E895C09CA49C",
                 "status": "completed",
-                "contact": "+13231112233",
+                "contact": "+15551234567",
                 "result_v1": {
-                    "reachable": True,
-                    "carrier": "Verizon",
-                    "number_type": "mobile"
+                    "apple_services": {
+                        "imessage": {"status": "available", "date": "2025-11-10"},
+                        "facetime": {"status": "available", "date": "2025-11-10"}
+                    },
+                    "carrier": {"number_type": "fixed_line_or_mobile"},
+                    "country": {"description": "New York", "flag": "🇺🇸", "iso2": "US"},
+                    "format": {"e164": "+15551234567", "national": "(555) 123-4567"},
+                    "time_zones": ["America/New_York"]
                 }
             }
         }
