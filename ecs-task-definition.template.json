@@ -1,0 +1,133 @@
+{
+  "family": "vital-agent-resource-rest",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/vital-agent-resource-task-role",
+  "containerDefinitions": [
+    {
+      "name": "vital-agent-resource-app",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/vital-agent-resource-rest:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8008,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "VITAL_ENV",
+          "value": "PROD"
+        },
+        {
+          "name": "PROD_APP_LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "PROD_APP_HOST",
+          "value": "0.0.0.0"
+        },
+        {
+          "name": "PROD_APP_PORT",
+          "value": "8008"
+        },
+        {
+          "name": "PROD_JWT_ALGORITHM",
+          "value": "RS256"
+        },
+        {
+          "name": "PROD_JWT_REQUIRED_CLAIMS",
+          "value": "sub,exp,iat"
+        },
+        {
+          "name": "PROD_JWT_TOKEN_EXPIRY_SECONDS",
+          "value": "3600"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "PROD_TOOL_WEATHER_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/weather-api-key"
+        },
+        {
+          "name": "PROD_TOOL_PLACE_SEARCH_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/place-search-api-key"
+        },
+        {
+          "name": "PROD_TOOL_GOOGLE_WEB_SEARCH_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/google-web-search-api-key"
+        },
+        {
+          "name": "PROD_TOOL_GOOGLE_ADDRESS_VALIDATION_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/google-address-validation-api-key"
+        },
+        {
+          "name": "PROD_TOOL_LOOP_LOOKUP_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/loop-lookup-api-key"
+        },
+        {
+          "name": "PROD_TOOL_LOOP_MESSAGE_AUTHORIZATION_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/loop-message-authorization-key"
+        },
+        {
+          "name": "PROD_TOOL_LOOP_MESSAGE_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/loop-message-secret-key"
+        },
+        {
+          "name": "PROD_TOOL_SEND_EMAIL_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/send-email-api-key"
+        },
+        {
+          "name": "PROD_TOOL_SEND_EMAIL_DOMAIN",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/send-email-domain"
+        },
+        {
+          "name": "PROD_TOOL_SEND_EMAIL_FROM_EMAIL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/send-email-from-email"
+        },
+        {
+          "name": "PROD_RUNPOD_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/runpod-api-key"
+        },
+        {
+          "name": "PROD_JWT_ENABLED",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-enabled"
+        },
+        {
+          "name": "PROD_JWT_JWKS_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-jwks-url"
+        },
+        {
+          "name": "PROD_JWT_ISSUER",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-issuer"
+        },
+        {
+          "name": "PROD_JWT_AUDIENCE",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-audience"
+        },
+        {
+          "name": "PROD_APP_CORS_ORIGINS",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/app-cors-origins"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vital-agent-resource-rest",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ]
+}

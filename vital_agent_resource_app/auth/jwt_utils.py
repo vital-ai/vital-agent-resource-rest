@@ -72,6 +72,14 @@ class JWTUtils:
                     
                     jwks_data = JWTUtils._fetch_jwks_keys(jwks_url)
                     return JWTUtils._get_public_key_from_jwks(jwks_data, kid)
+                except jwt.DecodeError as e:
+                    # Malformed token - log as warning, not error
+                    logger.warning(f"Malformed JWT token provided (invalid format): {str(e)[:100]}")
+                    raise JWTValidationError("Malformed JWT token")
+                except UnicodeDecodeError as e:
+                    # Invalid encoding - log as warning, not error
+                    logger.warning(f"JWT token has invalid encoding (not valid UTF-8)")
+                    raise JWTValidationError("Invalid token encoding")
                 except Exception as e:
                     logger.error(f"Failed to get key from JWKS: {e}")
                     raise JWTValidationError(f"JWKS key retrieval failed: {e}")
@@ -110,6 +118,11 @@ class JWTUtils:
             # Remove 'Bearer ' prefix if present
             if token.startswith('Bearer '):
                 token = token[7:]
+            
+            # Basic token format validation before attempting decode
+            if not token or len(token) < 10:
+                logger.warning("JWT token is empty or too short")
+                raise JWTValidationError("Invalid token format")
             
             # Get signing key based on algorithm and configuration
             algorithm = jwt_config.get('algorithm', 'RS256')
@@ -150,11 +163,23 @@ class JWTUtils:
         except jwt.ExpiredSignatureError:
             logger.warning("JWT token has expired")
             raise JWTExpiredError("JWT token has expired")
+        except jwt.DecodeError as e:
+            logger.warning(f"Malformed JWT token: {str(e)[:100]}")
+            raise JWTValidationError("Malformed JWT token")
         except jwt.InvalidTokenError as e:
             logger.warning(f"Invalid JWT token: {str(e)}")
             raise JWTValidationError(f"Invalid JWT token: {str(e)}")
+        except JWTValidationError:
+            # Re-raise our custom validation errors without additional logging
+            raise
+        except JWTExpiredError:
+            # Re-raise expired errors without additional logging
+            raise
+        except JWTInvalidClaimsError:
+            # Re-raise claims errors without additional logging
+            raise
         except Exception as e:
-            logger.error(f"JWT validation error: {str(e)}")
+            logger.error(f"Unexpected JWT validation error: {str(e)}")
             raise JWTValidationError(f"JWT validation failed: {str(e)}")
     
     @staticmethod

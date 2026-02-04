@@ -14,17 +14,28 @@ logger = logging.getLogger("VitalAgentContainerLogger")
 security = HTTPBearer(auto_error=False)
 
 def get_jwt_config() -> dict:
-    """Get JWT configuration from environment variables"""
+    """Get JWT configuration from environment variables with VITAL_ENV prefix"""
+    env = os.getenv('VITAL_ENV', 'DEV').upper()
+    
+    def get_prefixed(key: str, default: str = '') -> str:
+        """Get environment variable with __ separator"""
+        prefixed_key = f"{env}__JWT__{key}"
+        return os.getenv(prefixed_key, default)
+    
+    enabled_str = get_prefixed('ENABLED', 'false')
+    required_claims_str = get_prefixed('REQUIRED_CLAIMS', 'sub,exp,iat')
+    token_expiry_str = get_prefixed('TOKEN_EXPIRY_SECONDS', '3600')
+    
     return {
-        'enabled': os.getenv('JWT_ENABLED', 'false').lower() == 'true',
-        'algorithm': os.getenv('JWT_ALGORITHM', 'RS256'),
-        'secret_key': os.getenv('JWT_SECRET_KEY'),
-        'public_key_path': os.getenv('JWT_PUBLIC_KEY_PATH'),
-        'jwks_url': os.getenv('JWT_JWKS_URL'),
-        'required_claims': os.getenv('JWT_REQUIRED_CLAIMS', 'sub,exp,iat').split(','),
-        'token_expiry_seconds': int(os.getenv('JWT_TOKEN_EXPIRY_SECONDS', '3600')),
-        'issuer': os.getenv('JWT_ISSUER'),
-        'audience': os.getenv('JWT_AUDIENCE')
+        'enabled': enabled_str.lower() == 'true',
+        'algorithm': get_prefixed('ALGORITHM', 'RS256'),
+        'secret_key': get_prefixed('SECRET_KEY'),
+        'public_key_path': get_prefixed('PUBLIC_KEY_PATH'),
+        'jwks_url': get_prefixed('JWKS_URL'),
+        'required_claims': required_claims_str.split(','),
+        'token_expiry_seconds': int(token_expiry_str) if token_expiry_str else 3600,
+        'issuer': get_prefixed('ISSUER'),
+        'audience': get_prefixed('AUDIENCE')
     }
 
 def create_authenticated_user_from_jwt(jwt_payload: dict) -> AuthenticatedUser:

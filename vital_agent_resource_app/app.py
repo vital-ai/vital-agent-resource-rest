@@ -63,7 +63,7 @@ from vital_agent_resource_app.tools.place_search import models as place_models
 from vital_agent_resource_app.tools.weather import models as weather_models
 from vital_agent_resource_app.tools.web_search import models as web_search_models
 from vital_agent_resource_app.tools.send_message import models as loop_lookup_models
-from vital_agent_resource_app.utils.config_utils import ConfigUtils
+from vital_agent_resource_app.utils.env_config import EnvConfigLoader
 import functools
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -85,7 +85,7 @@ def get_tool_by_id(config_dict, tool_id):
     return None
 
 
-config = ConfigUtils.load_config()
+config = EnvConfigLoader.load_config()
 
 weather_config = get_tool_by_id(config, 'weather_tool')
 
