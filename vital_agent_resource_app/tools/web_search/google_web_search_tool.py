@@ -1,9 +1,12 @@
 import requests
+import logging
 from typing import List, Dict, Any, Optional
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
 from vital_agent_resource_app.tools.web_search.models import WebSearchResult, WebSearchInput
+
+logger = logging.getLogger("VitalAgentContainerLogger")
 
 class GoogleWebSearchTool(AbstractTool):
 
@@ -42,9 +45,13 @@ class GoogleWebSearchTool(AbstractTool):
         import time
         start_time = time.time()
         
+        logger.info("Google Web Search Tool - handle_tool_request called")
+        
         # Extract search parameters from validated tool input
         validated_input = tool_request.tool_input
         search_query = validated_input.search_query
+        
+        logger.info(f"Search query: {search_query}")
         num_results = validated_input.num_results or 10
         location = validated_input.location
         language = validated_input.language
@@ -53,6 +60,8 @@ class GoogleWebSearchTool(AbstractTool):
         safe_search = validated_input.safe_search
         search_type = validated_input.search_type or "search"
         time_period = validated_input.time_period
+        ludocid = validated_input.ludocid
+        kgmid = validated_input.kgmid
         
         try:
             # Get the raw search results to extract additional data
@@ -65,26 +74,79 @@ class GoogleWebSearchTool(AbstractTool):
                 device=device,
                 safe_search=safe_search,
                 search_type=search_type,
-                time_period=time_period
+                time_period=time_period,
+                ludocid=ludocid,
+                kgmid=kgmid
             )
             
-            # Extract structured results
-            results = self.google_web_search(
-                search_query=search_query,
-                num_results=num_results,
-                location=location,
-                language=language,
-                country=country,
-                device=device,
-                safe_search=safe_search,
-                search_type=search_type,
-                time_period=time_period
-            )
+            # Extract structured results from already-fetched raw data
+            results = self._extract_search_results(raw_results, search_type)
             
-            # Extract additional data structures
-            knowledge_graph = self._extract_knowledge_graph(raw_results)
-            related_questions = self._extract_related_questions(raw_results)
-            search_information = raw_results.get('search_information', {})
+            # Check if raw_results contains an error
+            api_error = None
+            api_status_code = None
+            
+            error_value = raw_results.get('error')
+            if error_value:
+                if isinstance(error_value, str):
+                    # SerpAPI inline message (e.g. "Google hasn't returned any results for this query.")
+                    # This is not a true API error — it's a valid empty result set.
+                    logger.info(f"SerpAPI message: {error_value}")
+                    api_error = None
+                    api_status_code = None
+                else:
+                    # Our synthetic error dict from a non-200 HTTP response
+                    api_error = raw_results.get('error_message', 'Unknown API error')
+                    api_status_code = raw_results.get('status_code')
+                    logger.error(f"API Error detected: {api_error}")
+                knowledge_graph = None
+                related_questions = None
+                search_information = {}
+            else:
+                # Extract additional data structures
+                knowledge_graph = self._extract_knowledge_graph(raw_results)
+                related_questions = self._extract_related_questions(raw_results)
+                search_information = raw_results.get('search_information', {})
+                
+                # Log search results
+                logger.info("="*80)
+                logger.info("GOOGLE WEB SEARCH RESULTS")
+                logger.info("="*80)
+                logger.info(f"Query: '{search_query}'")
+                logger.info(f"Total results found: {len(results)}")
+                logger.info(f"Result types: {[r.result_type for r in results]}")
+                logger.info("-"*80)
+                
+                # Log detailed results
+                for idx, result in enumerate(results, 1):
+                    logger.info(f"Result {idx}: [{result.result_type}] {result.title}")
+                    logger.info(f"  Link: {result.link}")
+                    if result.snippet:
+                        snippet_preview = result.snippet[:100] + '...' if len(result.snippet) > 100 else result.snippet
+                        logger.info(f"  Snippet: {snippet_preview}")
+                    if result.price:
+                        logger.info(f"  Price: {result.price}")
+                    if result.rating:
+                        logger.info(f"  Rating: {result.rating}")
+                
+                # Log knowledge graph if present
+                if knowledge_graph:
+                    logger.info("-"*80)
+                    logger.info("KNOWLEDGE GRAPH:")
+                    logger.info(f"  Title: {knowledge_graph.title}")
+                    logger.info(f"  Type: {knowledge_graph.type}")
+                    if knowledge_graph.description:
+                        desc_preview = knowledge_graph.description[:100] + '...' if len(knowledge_graph.description) > 100 else knowledge_graph.description
+                        logger.info(f"  Description: {desc_preview}")
+                
+                # Log related questions if present
+                if related_questions:
+                    logger.info("-"*80)
+                    logger.info(f"RELATED QUESTIONS ({len(related_questions)}):")
+                    for idx, rq in enumerate(related_questions, 1):
+                        logger.info(f"  Q{idx}: {rq.question}")
+                
+                logger.info("="*80)
             
             # Create structured output using the registered model
             from vital_agent_resource_app.tools.web_search.models import WebSearchOutput
@@ -95,18 +157,22 @@ class GoogleWebSearchTool(AbstractTool):
                 total_results=search_information.get('total_results', len(results)),
                 knowledge_graph=knowledge_graph,
                 related_questions=related_questions,
-                search_information=search_information
+                search_information=search_information,
+                api_error=api_error,
+                api_status_code=api_status_code
             )
             
             return self._create_success_response(tool_output.dict(), start_time)
             
         except Exception as e:
+            logger.error(f"Google Web Search error: {str(e)}")
             return self._create_error_response(str(e), start_time)
 
     def _get_raw_search_results(self, search_query: str, num_results: int = 10, location: str = None, 
                                language: str = None, country: str = None, device: str = "desktop",
                                safe_search: str = None, search_type: str = "search", 
-                               time_period: str = None) -> dict:
+                               time_period: str = None, ludocid: str = None,
+                               kgmid: str = None) -> dict:
         """Get raw search results from SerpAPI for additional data extraction"""
         import requests
         from serpapi import GoogleSearch
@@ -114,7 +180,12 @@ class GoogleWebSearchTool(AbstractTool):
         try:
             # Get API key from app config
             api_key = self.config.get('api_key')
+            logger.info(f"Config keys available: {list(self.config.keys())}")
+            logger.info(f"API key loaded: ...{api_key[-4:] if api_key else 'None'}")
+            logger.info(f"API key length: {len(api_key) if api_key else 0}")
+            
             if not api_key:
+                logger.error("SerpAPI API key not found in configuration")
                 raise Exception("SerpAPI API key not found in configuration")
             
             # Build search parameters
@@ -125,6 +196,8 @@ class GoogleWebSearchTool(AbstractTool):
                 "num": num_results,
                 "device": device
             }
+            
+            logger.info(f"SerpAPI request params: engine={params['engine']}, q={params['q']}, num={params['num']}")
             
             # Add optional parameters
             if location:
@@ -138,6 +211,12 @@ class GoogleWebSearchTool(AbstractTool):
             if time_period:
                 params["tbs"] = f"qdr:{time_period}"
             
+            # Add ludocid and kgmid if provided
+            if ludocid:
+                params["ludocid"] = ludocid
+            if kgmid:
+                params["kgmid"] = kgmid
+            
             # Set search type specific parameters
             if search_type == "news":
                 params["tbm"] = "nws"
@@ -145,33 +224,40 @@ class GoogleWebSearchTool(AbstractTool):
                 params["tbm"] = "isch"
             elif search_type == "shopping":
                 params["tbm"] = "shop"
+            elif search_type == "local":
+                params["tbm"] = "lcl"
             
             # Execute search
             search = GoogleSearch(params)
             results = search.get_dict()
             
-            if search.get_response().status_code == 200:
+            response_status = search.get_response().status_code
+            logger.info(f"SerpAPI response status: {response_status}")
+            
+            if response_status == 200:
+                logger.info(f"SerpAPI returned {len(results.get('organic_results', []))} organic results")
                 return results
             else:
-                raise Exception(f"Search API returned status code: {search.get_response().status_code}")
+                # Return error information instead of raising exception
+                error_body = search.get_response().text[:500]
+                logger.error(f"Search API returned status code: {response_status}")
+                logger.error(f"Response body: {error_body}")
+                
+                # Return a dict with error information
+                return {
+                    'error': True,
+                    'status_code': response_status,
+                    'error_message': error_body,
+                    'organic_results': []
+                }
                 
         except requests.exceptions.RequestException as e:
             raise Exception(f"Network error occurred: {e}")
         except Exception as e:
             raise Exception(f"Search error: {e}")
 
-    def google_web_search(self, search_query: str, num_results: int = 10, location: str = None, 
-                         language: str = None, country: str = None, device: str = "desktop",
-                         safe_search: str = None, search_type: str = "search", 
-                         time_period: str = None) -> List[WebSearchResult]:
-        """Perform Google web search and return structured results"""
-        
-        # Get raw results to avoid duplicate API calls
-        results = self._get_raw_search_results(
-            search_query, num_results, location, language, country, 
-            device, safe_search, search_type, time_period
-        )
-        
+    def _extract_search_results(self, results: dict, search_type: str = "search") -> List[WebSearchResult]:
+        """Extract structured search results from raw SerpAPI response dict"""
         web_search_results = []
         
         # Process different result types based on search type
@@ -181,6 +267,8 @@ class GoogleWebSearchTool(AbstractTool):
             result_types = [("images_results", "image")]
         elif search_type == "shopping":
             result_types = [("shopping_results", "shopping")]
+        elif search_type == "local":
+            result_types = []
         else:
             # For general search, extract from all available result blocks
             result_types = [
@@ -206,6 +294,9 @@ class GoogleWebSearchTool(AbstractTool):
             places = local_results if isinstance(local_results, list) else []
             
         for idx, result in enumerate(places):
+            if idx == 0:
+                logger.info(f"Sample local result keys: {list(result.keys())}")
+                logger.info(f"Sample local result place_id={result.get('place_id')}, data_cid={result.get('data_cid')}, hours={result.get('hours')}, operating_hours={result.get('operating_hours')}")
             web_result = self._extract_result_fields(result, "local", idx)
             if web_result:
                 web_search_results.append(web_result)
@@ -231,6 +322,8 @@ class GoogleWebSearchTool(AbstractTool):
             reviews = None
             address = None
             phone = None
+            place_id = None
+            hours = None
             ingredients = None
             total_time = None
             
@@ -244,6 +337,8 @@ class GoogleWebSearchTool(AbstractTool):
                 phone = result.get('phone')
                 rating = result.get('rating')
                 reviews = result.get('reviews')
+                place_id = result.get('place_id', result.get('data_cid', None))
+                hours = result.get('hours', result.get('operating_hours', None))
                 
             elif result_type == "recipe":
                 ingredients = result.get('ingredients', [])
@@ -265,6 +360,8 @@ class GoogleWebSearchTool(AbstractTool):
                 reviews=reviews,
                 address=address,
                 phone=phone,
+                place_id=place_id,
+                hours=hours,
                 ingredients=ingredients,
                 total_time=total_time
             )

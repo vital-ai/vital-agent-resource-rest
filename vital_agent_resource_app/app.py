@@ -13,7 +13,18 @@ import signal
 import sys
 import os
 
+# Configure VitalAgentContainerLogger
 logger = logging.getLogger("VitalAgentContainerLogger")
+logger.setLevel(logging.INFO)
+
+# Add console handler if not already present
+if not logger.handlers:
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    logger.propagate = False
 
 from vital_llm_cluster_mgr.vital_llm_cluster_mgr import VitalLLMClusterMgr
 from vital_llm_cluster_mgr.vllm_interface import with_cancellation, ErrorResponse, CompletionResponse
