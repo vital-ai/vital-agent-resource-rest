@@ -7,7 +7,7 @@ from vital_agent_resource_app.tools.send_message.models import (
     LoopLookupRequest, LoopLookupResult, LoopLookupError
 )
 from typing import List, Dict, Any, Union
-import requests
+import httpx
 import time
 import logging
 
@@ -59,7 +59,7 @@ class LoopLookupTool(AbstractTool):
             }
         ]
 
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         """Handle Loop Lookup tool requests"""
         start_time = time.time()
         
@@ -71,24 +71,24 @@ class LoopLookupTool(AbstractTool):
             
             # Determine request type based on input model
             if isinstance(validated_input, LoopLookupSingleInput):
-                result = self._single_lookup(validated_input)
+                result = await self._single_lookup(validated_input)
             elif isinstance(validated_input, LoopLookupBulkInput):
-                result = self._bulk_lookup(validated_input)
+                result = await self._bulk_lookup(validated_input)
             elif isinstance(validated_input, LoopLookupStatusInput):
-                result = self._status_check(validated_input)
+                result = await self._status_check(validated_input)
             else:
                 return self._create_error_response("Invalid input type for Loop Lookup tool", start_time)
             
             return self._create_success_response(result, start_time)
             
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(f"Loop Lookup API request error: {e}")
             return self._create_error_response(f"API request failed: {str(e)}", start_time)
         except Exception as e:
             logger.error(f"Loop Lookup tool error: {e}")
             return self._create_error_response(f"Tool error: {str(e)}", start_time)
 
-    def _single_lookup(self, validated_input: LoopLookupSingleInput) -> dict:
+    async def _single_lookup(self, validated_input: LoopLookupSingleInput) -> dict:
         """Handle single contact lookup"""
         endpoint = "/lookup/"
         
@@ -104,7 +104,7 @@ class LoopLookupTool(AbstractTool):
         
         logger.info(f"Performing single lookup for contact: {validated_input.contact}")
         
-        response_data = self._make_api_request("POST", endpoint, payload)
+        response_data = await self._make_api_request("POST", endpoint, payload)
         
         # Handle error response
         if not response_data.get("success", False):
@@ -125,7 +125,7 @@ class LoopLookupTool(AbstractTool):
         
         return output.dict()
 
-    def _bulk_lookup(self, validated_input: LoopLookupBulkInput) -> dict:
+    async def _bulk_lookup(self, validated_input: LoopLookupBulkInput) -> dict:
         """Handle bulk contact lookup"""
         endpoint = "/lookup/"
         
@@ -141,7 +141,7 @@ class LoopLookupTool(AbstractTool):
         
         logger.info(f"Performing bulk lookup for {len(validated_input.contacts)} contacts")
         
-        response_data = self._make_api_request("POST", endpoint, payload)
+        response_data = await self._make_api_request("POST", endpoint, payload)
         
         # Handle error response
         if not response_data.get("success", False):
@@ -165,13 +165,13 @@ class LoopLookupTool(AbstractTool):
         
         return output.dict()
 
-    def _status_check(self, validated_input: LoopLookupStatusInput) -> dict:
+    async def _status_check(self, validated_input: LoopLookupStatusInput) -> dict:
         """Handle status check for a request"""
         endpoint = f"/lookup/status/{validated_input.request_id}/"
         
         logger.info(f"Checking status for request ID: {validated_input.request_id}")
         
-        response_data = self._make_api_request("GET", endpoint)
+        response_data = await self._make_api_request("GET", endpoint)
         
         # Create result object
         result_obj = LoopLookupResult(
@@ -189,8 +189,8 @@ class LoopLookupTool(AbstractTool):
         
         return output.dict()
 
-    def _make_api_request(self, method: str, endpoint: str, data: dict = None) -> dict:
-        """Make authenticated API request to Loop Lookup service"""
+    async def _make_api_request(self, method: str, endpoint: str, data: dict = None) -> dict:
+        """Make authenticated async API request to Loop Lookup service"""
         url = f"{self.base_url}{endpoint}"
         
         headers = {
@@ -201,14 +201,15 @@ class LoopLookupTool(AbstractTool):
         logger.debug(f"Making {method} request to {url}")
         
         try:
-            if method.upper() == "GET":
-                response = requests.get(url, headers=headers, timeout=30)
-            elif method.upper() == "POST":
-                response = requests.post(url, headers=headers, json=data, timeout=30)
-            elif method.upper() == "DELETE":
-                response = requests.delete(url, headers=headers, timeout=30)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                if method.upper() == "GET":
+                    response = await client.get(url, headers=headers)
+                elif method.upper() == "POST":
+                    response = await client.post(url, headers=headers, json=data)
+                elif method.upper() == "DELETE":
+                    response = await client.delete(url, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
             
             logger.debug(f"Response status: {response.status_code}")
             
@@ -229,11 +230,11 @@ class LoopLookupTool(AbstractTool):
             
             return response.json()
             
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             raise Exception("Request timeout - Loop Lookup service did not respond in time")
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             raise Exception("Connection error - Unable to reach Loop Lookup service")
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             raise Exception(f"Request error: {str(e)}")
         except ValueError as e:
             if "JSON" in str(e):

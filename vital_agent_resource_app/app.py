@@ -303,8 +303,8 @@ async def handle_tool_request(
             tool_input=validated_input
         )
         
-        # Execute tool
-        response = tool_instance.handle_tool_request(tool_request)
+        # Execute tool — all tools are async
+        response = await tool_instance.handle_tool_request(tool_request)
         
         # Calculate duration
         duration_ms = int((time.time() - start_time) * 1000)

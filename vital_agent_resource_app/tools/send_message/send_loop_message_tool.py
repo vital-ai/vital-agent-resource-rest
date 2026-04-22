@@ -8,7 +8,7 @@ from vital_agent_resource_app.tools.send_message.models import (
     LoopMessageGroup, LoopMessageStatusResult, LoopMessageError
 )
 from typing import List, Dict, Any, Union
-import requests
+import httpx
 import time
 import logging
 
@@ -83,7 +83,7 @@ class LoopMessageTool(AbstractTool):
             }
         ]
 
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         """Handle Loop Message tool requests"""
         start_time = time.time()
         
@@ -95,28 +95,28 @@ class LoopMessageTool(AbstractTool):
             
             # Determine request type based on input model
             if isinstance(validated_input, LoopMessageSingleInput):
-                result = self._send_single_message(validated_input)
+                result = await self._send_single_message(validated_input)
             elif isinstance(validated_input, LoopMessageGroupInput):
-                result = self._send_group_message(validated_input)
+                result = await self._send_group_message(validated_input)
             elif isinstance(validated_input, LoopMessageAudioInput):
-                result = self._send_audio_message(validated_input)
+                result = await self._send_audio_message(validated_input)
             elif isinstance(validated_input, LoopMessageReactionInput):
-                result = self._send_reaction(validated_input)
+                result = await self._send_reaction(validated_input)
             elif isinstance(validated_input, LoopMessageStatusInput):
-                result = self._check_status(validated_input)
+                result = await self._check_status(validated_input)
             else:
                 return self._create_error_response("Invalid input type for Loop Message tool", start_time)
             
             return self._create_success_response(result, start_time)
             
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(f"Loop Message API request error: {e}")
             return self._create_error_response(f"API request failed: {str(e)}", start_time)
         except Exception as e:
             logger.error(f"Loop Message tool error: {e}")
             return self._create_error_response(f"Tool error: {str(e)}", start_time)
 
-    def _send_single_message(self, validated_input: LoopMessageSingleInput) -> dict:
+    async def _send_single_message(self, validated_input: LoopMessageSingleInput) -> dict:
         """Handle single message sending"""
         endpoint = "/message/send/"
         
@@ -148,7 +148,7 @@ class LoopMessageTool(AbstractTool):
         
         logger.info(f"Sending single message to: {validated_input.recipient}")
         
-        response_data = self._make_api_request("POST", endpoint, payload)
+        response_data = await self._make_api_request("POST", endpoint, payload)
         
         # Handle error response
         if not response_data.get("success", False):
@@ -165,7 +165,7 @@ class LoopMessageTool(AbstractTool):
         
         return output.dict()
 
-    def _send_group_message(self, validated_input: LoopMessageGroupInput) -> dict:
+    async def _send_group_message(self, validated_input: LoopMessageGroupInput) -> dict:
         """Handle group message sending"""
         endpoint = "/message/send/"
         
@@ -189,7 +189,7 @@ class LoopMessageTool(AbstractTool):
         
         logger.info(f"Sending group message to group: {validated_input.group}")
         
-        response_data = self._make_api_request("POST", endpoint, payload)
+        response_data = await self._make_api_request("POST", endpoint, payload)
         
         # Handle error response
         if not response_data.get("success", False):
@@ -214,7 +214,7 @@ class LoopMessageTool(AbstractTool):
         
         return output.dict()
 
-    def _send_audio_message(self, validated_input: LoopMessageAudioInput) -> dict:
+    async def _send_audio_message(self, validated_input: LoopMessageAudioInput) -> dict:
         """Handle audio message sending"""
         endpoint = "/message/send/"
         
@@ -236,7 +236,7 @@ class LoopMessageTool(AbstractTool):
         
         logger.info(f"Sending audio message to: {validated_input.recipient}")
         
-        response_data = self._make_api_request("POST", endpoint, payload)
+        response_data = await self._make_api_request("POST", endpoint, payload)
         
         # Handle error response
         if not response_data.get("success", False):
@@ -253,7 +253,7 @@ class LoopMessageTool(AbstractTool):
         
         return output.dict()
 
-    def _send_reaction(self, validated_input: LoopMessageReactionInput) -> dict:
+    async def _send_reaction(self, validated_input: LoopMessageReactionInput) -> dict:
         """Handle reaction sending"""
         endpoint = "/message/send/"
         
@@ -275,7 +275,7 @@ class LoopMessageTool(AbstractTool):
         
         logger.info(f"Sending reaction '{validated_input.reaction}' to message {validated_input.message_id}")
         
-        response_data = self._make_api_request("POST", endpoint, payload)
+        response_data = await self._make_api_request("POST", endpoint, payload)
         
         # Handle error response
         if not response_data.get("success", False):
@@ -292,13 +292,13 @@ class LoopMessageTool(AbstractTool):
         
         return output.dict()
 
-    def _check_status(self, validated_input: LoopMessageStatusInput) -> dict:
+    async def _check_status(self, validated_input: LoopMessageStatusInput) -> dict:
         """Handle status check for a message"""
         endpoint = f"/message/status/{validated_input.message_id}/"
         
         logger.info(f"Checking status for message ID: {validated_input.message_id}")
         
-        response_data = self._make_api_request("GET", endpoint)
+        response_data = await self._make_api_request("GET", endpoint)
         
         # Create result object
         result_obj = LoopMessageStatusResult(
@@ -321,8 +321,8 @@ class LoopMessageTool(AbstractTool):
         
         return output.dict()
 
-    def _make_api_request(self, method: str, endpoint: str, data: dict = None) -> dict:
-        """Make authenticated API request to Loop Message service"""
+    async def _make_api_request(self, method: str, endpoint: str, data: dict = None) -> dict:
+        """Make authenticated async API request to Loop Message service"""
         url = f"{self.base_url}{endpoint}"
         
         headers = {
@@ -334,12 +334,13 @@ class LoopMessageTool(AbstractTool):
         logger.debug(f"Making {method} request to {url}")
         
         try:
-            if method.upper() == "GET":
-                response = requests.get(url, headers=headers, timeout=30)
-            elif method.upper() == "POST":
-                response = requests.post(url, headers=headers, json=data, timeout=30)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                if method.upper() == "GET":
+                    response = await client.get(url, headers=headers)
+                elif method.upper() == "POST":
+                    response = await client.post(url, headers=headers, json=data)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
             
             logger.debug(f"Response status: {response.status_code}")
             
@@ -360,11 +361,11 @@ class LoopMessageTool(AbstractTool):
             
             return response.json()
             
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             raise Exception("Request timeout - Loop Message service did not respond in time")
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             raise Exception("Connection error - Unable to reach Loop Message service")
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             raise Exception(f"Request error: {str(e)}")
         except ValueError as e:
             if "JSON" in str(e):

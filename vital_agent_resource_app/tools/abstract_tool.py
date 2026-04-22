@@ -11,7 +11,7 @@ class AbstractTool(ABC):
         self.config = config
 
     @abstractmethod
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         pass
 
     @abstractmethod

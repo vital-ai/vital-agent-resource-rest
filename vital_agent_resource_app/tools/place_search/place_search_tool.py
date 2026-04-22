@@ -1,9 +1,14 @@
+import asyncio
 import googlemaps
+import time
+import logging
 from typing import List, Dict, Any
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
 from vital_agent_resource_app.tools.place_search.models import PlaceDetails
+
+logger = logging.getLogger("VitalAgentContainerLogger")
 
 
 class PlaceSearchTool(AbstractTool):
@@ -25,8 +30,7 @@ class PlaceSearchTool(AbstractTool):
             }
         ]
 
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
-        import time
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         start_time = time.time()
         
         # Extract search string from validated tool input
@@ -34,9 +38,9 @@ class PlaceSearchTool(AbstractTool):
         place_search_string = validated_input.place_search_string
         
         try:
-            results = self.search_place(place_search_string)
+            # googlemaps client is sync — run in thread pool
+            results = await asyncio.to_thread(self.search_place, place_search_string)
             
-            # Create structured output using the registered model
             from vital_agent_resource_app.tools.place_search.models import PlaceSearchOutput
             tool_output = PlaceSearchOutput(
                 tool="place_search_tool",

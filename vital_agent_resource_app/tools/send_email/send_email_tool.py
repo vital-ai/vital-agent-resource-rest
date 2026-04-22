@@ -6,6 +6,7 @@ from vital_agent_resource_app.tools.send_email.models import (
 )
 from typing import List, Dict, Any, Union
 from mailgun.client import Client
+import asyncio
 import time
 import logging
 
@@ -76,7 +77,7 @@ class SendEmailTool(AbstractTool):
             }
         ]
 
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         start_time = time.time()
         
         # Validate configuration
@@ -99,8 +100,10 @@ class SendEmailTool(AbstractTool):
             # Prepare email data
             email_data = self._prepare_email_data(validated_input)
             
-            # Send email via Mailgun
-            response = self.client.messages.create(data=email_data, domain=self.domain)
+            # Send email via Mailgun — client is sync, run in thread pool
+            response = await asyncio.to_thread(
+                self.client.messages.create, data=email_data, domain=self.domain
+            )
             
             logger.info(f"Email sent successfully: {response.status_code}")
             

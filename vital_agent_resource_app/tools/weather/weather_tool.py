@@ -2,7 +2,11 @@ from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
 from typing import List, Dict, Any
-import requests
+import httpx
+import time
+import logging
+
+logger = logging.getLogger("VitalAgentContainerLogger")
 
 
 class WeatherTool(AbstractTool):
@@ -27,8 +31,7 @@ class WeatherTool(AbstractTool):
             }
         ]
 
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
-        import time
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         start_time = time.time()
         
         # Extract parameters from validated tool input
@@ -39,16 +42,10 @@ class WeatherTool(AbstractTool):
         use_archive = validated_input.use_archive or False
         archive_date = validated_input.archive_date or ""
 
-        # include_previous
-        # past_days=10
-
-        # or archive endpoint
-        # $ curl "https://archive-api.open-meteo.com/v1/era5?latitude=52.52&longitude=13.41&start_date=2021-01-01&end_date=2021-12-31
-
         # archive case
         if use_archive and archive_date:
 
-            weather_url = f"https://archive-api.open-meteo.com/v1/era5"
+            weather_url = "https://archive-api.open-meteo.com/v1/era5"
 
             daily_param_list = [
                 "weather_code",
@@ -81,15 +78,14 @@ class WeatherTool(AbstractTool):
             }
 
             try:
-                response = requests.get(weather_url, params=params)
-                print(f"GET: {response.url}")
-                print(f"Response: {response.status_code}")
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.get(weather_url, params=params)
+                logger.info(f"GET: {response.url}")
+                logger.info(f"Response: {response.status_code}")
 
                 if response.status_code == 200:
                     response_content = response.json()
-                    print(response_content)
                     
-                    # Create structured output using the registered model
                     from vital_agent_resource_app.tools.weather.models import WeatherOutput, WeatherData
                     weather_data = WeatherData(**response_content)
                     tool_output = WeatherOutput(
@@ -99,10 +95,10 @@ class WeatherTool(AbstractTool):
                     
                     return self._create_success_response(tool_output.dict(), start_time)
                 else:
-                    print(f"Error: {response.status_code}")
+                    logger.error(f"Weather API error: {response.status_code}")
                     return self._create_error_response(f"Weather API error: {response.status_code}", start_time)
-            except requests.exceptions.RequestException as e:
-                print(f"An error occurred: {e}")
+            except httpx.RequestError as e:
+                logger.error(f"An error occurred: {e}")
                 return self._create_error_response(f"Request error: {str(e)}", start_time)
 
         # normal case
@@ -155,16 +151,14 @@ class WeatherTool(AbstractTool):
             params["past_days"] = 10
 
         try:
-            # print(params)
-            response = requests.get(weather_url, params=params)
-            print(f"GET: {response.url}")
-            print(f"Response: {response.status_code}")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(weather_url, params=params)
+            logger.info(f"GET: {response.url}")
+            logger.info(f"Response: {response.status_code}")
 
             if response.status_code == 200:
                 response_content = response.json()
-                print(response_content)
                 
-                # Create structured output using the registered model
                 from vital_agent_resource_app.tools.weather.models import WeatherOutput, WeatherData
                 weather_data = WeatherData(**response_content)
                 tool_output = WeatherOutput(
@@ -174,10 +168,10 @@ class WeatherTool(AbstractTool):
                 
                 return self._create_success_response(tool_output.dict(), start_time)
             else:
-                print(f"Error: {response.status_code}")
+                logger.error(f"Weather API error: {response.status_code}")
                 return self._create_error_response(f"Weather API error: {response.status_code}", start_time)
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred: {e}")
+        except httpx.RequestError as e:
+            logger.error(f"An error occurred: {e}")
             return self._create_error_response(f"Request error: {str(e)}", start_time)
 
 

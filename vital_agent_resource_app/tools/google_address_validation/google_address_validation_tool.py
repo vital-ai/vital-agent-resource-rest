@@ -1,9 +1,13 @@
-import requests
+import httpx
+import time
+import logging
 from typing import List, Dict, Any
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
 from vital_agent_resource_app.tools.google_address_validation.models import AddressValidationResult, AddressComponent
+
+logger = logging.getLogger("VitalAgentContainerLogger")
 
 
 class GoogleAddressValidationTool(AbstractTool):
@@ -25,8 +29,7 @@ class GoogleAddressValidationTool(AbstractTool):
             }
         ]
 
-    def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
-        import time
+    async def handle_tool_request(self, tool_request: ToolRequest) -> ToolResponse:
         start_time = time.time()
         
         # Extract address from validated tool input
@@ -34,9 +37,8 @@ class GoogleAddressValidationTool(AbstractTool):
         address = validated_input.address
         
         try:
-            results = self.validate_address(address)
+            results = await self.validate_address(address)
             
-            # Create structured output using the registered model
             from vital_agent_resource_app.tools.google_address_validation.models import AddressValidationOutput
             tool_output = AddressValidationOutput(
                 tool="google_address_validation_tool",
@@ -48,20 +50,18 @@ class GoogleAddressValidationTool(AbstractTool):
         except Exception as e:
             return self._create_error_response(str(e), start_time)
 
-    def validate_address(self, address: str) -> List[AddressValidationResult]:
+    async def validate_address(self, address: str) -> List[AddressValidationResult]:
         
-        print(f"Validating address: {address}")
+        logger.info(f"Validating address: {address}")
         
         api_key = self.config.get("api_key", "")
         
         if not api_key:
-            print("Error: No API key configured for Google Address Validation")
+            logger.error("No API key configured for Google Address Validation")
             return []
         
-        # Google Address Validation API endpoint
         url = "https://addressvalidation.googleapis.com/v1:validateAddress"
         
-        # Request payload for Address Validation API
         payload = {
             "address": {
                 "addressLines": [address]
@@ -78,25 +78,24 @@ class GoogleAddressValidationTool(AbstractTool):
         }
         
         try:
-            response = requests.post(url, json=payload, headers=headers, params=params)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload, headers=headers, params=params)
             response.raise_for_status()
             
             result_data = response.json()
             
-        except requests.exceptions.RequestException as e:
-            print(f"Address Validation API Error: {e}")
+        except httpx.RequestError as e:
+            logger.error(f"Address Validation API Error: {e}")
             return []
         except Exception as e:
-            print(f"Unexpected error during address validation: {e}")
+            logger.error(f"Unexpected error during address validation: {e}")
             return []
         
         validated_addresses = []
         
-        # Parse the Address Validation API response
         result = result_data.get('result', {})
         
         if result:
-            # Extract address components
             address_components = []
             components = result.get('address', {}).get('addressComponents', [])
             
