@@ -13,4 +13,5 @@ class ToolName(str, Enum):
     loop_message_tool = "loop_message_tool"
     place_search_tool = "place_search_tool"
     send_email_tool = "send_email_tool"
+    serper_web_search_tool = "serper_web_search_tool"
     weather_tool = "weather_tool"

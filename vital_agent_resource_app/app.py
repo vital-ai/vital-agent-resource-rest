@@ -50,6 +50,9 @@ from vital_agent_resource_app.tools.weather.models import (
 from vital_agent_resource_app.tools.web_search.models import (
     WebSearchInput, WebSearchOutput, WebSearchResult
 )
+from vital_agent_resource_app.tools.serper_web_search.models import (
+    SerperWebSearchInput, SerperWebSearchOutput
+)
 from vital_agent_resource_app.tools.send_message.models import (
     LoopLookupSingleInput, LoopLookupBulkInput, LoopLookupStatusInput,
     LoopLookupSingleOutput, LoopLookupBulkOutput, LoopLookupStatusOutput,
@@ -64,6 +67,7 @@ from vital_agent_resource_app.tools.send_email.models import (
 )
 from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
 from vital_agent_resource_app.tools.web_search.google_web_search_tool import GoogleWebSearchTool
+from vital_agent_resource_app.tools.serper_web_search.serper_web_search_tool import SerperWebSearchTool
 from vital_agent_resource_app.tools.send_message.loop_lookup_tool import LoopLookupTool
 from vital_agent_resource_app.tools.send_message.send_loop_message_tool import LoopMessageTool
 from vital_agent_resource_app.tools.send_email.send_email_tool import SendEmailTool
@@ -73,6 +77,7 @@ from vital_agent_resource_app.tools.google_address_validation import models as a
 from vital_agent_resource_app.tools.place_search import models as place_models
 from vital_agent_resource_app.tools.weather import models as weather_models
 from vital_agent_resource_app.tools.web_search import models as web_search_models
+from vital_agent_resource_app.tools.serper_web_search import models as serper_web_search_models
 from vital_agent_resource_app.tools.send_message import models as loop_lookup_models
 from vital_agent_resource_app.utils.env_config import EnvConfigLoader
 import functools
@@ -114,6 +119,8 @@ loop_message_config = get_tool_by_id(config, 'loop_message_tool')
 
 send_email_config = get_tool_by_id(config, 'send_email_tool')
 
+serper_web_search_config = get_tool_by_id(config, 'serper_web_search_tool')
+
 
 # Instantiate tool registry
 tool_registry = ToolRegistry()
@@ -145,6 +152,13 @@ tool_registry.add_tool(
     input_model=WebSearchInput,
     output_model=WebSearchOutput,
     tool_instance=GoogleWebSearchTool(google_web_search_config)
+)
+
+tool_registry.add_tool(
+    tool_name=ToolName.serper_web_search_tool.value,
+    input_model=SerperWebSearchInput,
+    output_model=SerperWebSearchOutput,
+    tool_instance=SerperWebSearchTool(serper_web_search_config)
 )
 
 tool_registry.add_tool(

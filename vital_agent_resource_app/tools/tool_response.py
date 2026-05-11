@@ -7,6 +7,7 @@ from vital_agent_resource_app.tools.google_address_validation.models import Addr
 from vital_agent_resource_app.tools.place_search.models import PlaceSearchOutput
 from vital_agent_resource_app.tools.weather.models import WeatherOutput
 from vital_agent_resource_app.tools.web_search.models import WebSearchOutput
+from vital_agent_resource_app.tools.serper_web_search.models import SerperWebSearchOutput
 from vital_agent_resource_app.tools.send_email.models import EmailOutput
 
 
@@ -20,12 +21,18 @@ class ToolResponse(BaseModel):
         PlaceSearchOutput, 
         WeatherOutput,
         WebSearchOutput,
+        SerperWebSearchOutput,
         EmailOutput,
         dict
         ]] = Field(None, description="Tool-specific output data")
 
     def to_dict(self):
-        return self.dict()
+        d = self.dict()
+        if d.get('tool_output') is None:
+            d['tool_output'] = {"results": []}
+        elif isinstance(d.get('tool_output'), dict) and 'results' not in d['tool_output']:
+            d['tool_output']['results'] = []
+        return d
 
     @classmethod
     def create_success(cls, tool_output, duration_ms: int):
