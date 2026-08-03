@@ -307,6 +307,53 @@ async def test_error_mapping():
     check('404 still explains the private-repo ambiguity',
           'cannot see it' in msg, msg[:100])
 
+    # githubkit classifies rate limits itself; both subclass RequestFailed so they
+    # reach _map_request_failed. Trusting its verdict beats sniffing headers.
+    from githubkit.exception import SecondaryRateLimitExceeded, PrimaryRateLimitExceeded
+    from datetime import timedelta
+
+    err = SecondaryRateLimitExceeded(_FakeResponse(403, {'retry-after': '60'},
+                                                  {'message': 'slow down'}),
+                                     timedelta(seconds=60))
+    msg = client._map_request_failed(err, 'ctx').message
+    check("githubkit's own SecondaryRateLimitExceeded is classified as secondary",
+          'secondary rate limit' in msg, msg[:100])
+
+    err = PrimaryRateLimitExceeded(_FakeResponse(403, {}, {'message': 'limit'}),
+                                   timedelta(seconds=60))
+    msg = client._map_request_failed(err, 'ctx').message
+    check("githubkit's own PrimaryRateLimitExceeded is classified as primary",
+          'primary rate limit' in msg, msg[:100])
+
+
+async def test_timeout_branch():
+    """Timeouts must produce the mutation warning, not the generic error.
+
+    githubkit wraps httpx.TimeoutException in its own RequestTimeout, so catching
+    httpx.TimeoutException would silently never fire.
+    """
+    print("\n4c. Timeout handling")
+
+    import githubkit.exception as gh_ex
+    check('githubkit wraps timeouts in its own type, not httpx.TimeoutException',
+          not issubclass(gh_ex.RequestTimeout, __import__('httpx').TimeoutException),
+          'RequestTimeout is an httpx.TimeoutException after all')
+
+    config = build_config()
+    config['timeout'] = 0.001
+    tool = GitHubIssueTool(config, GitHubClient(config))
+    # githubkit caches GETs; disable it so the request actually goes out.
+    tool.client.gh = __import__('githubkit').GitHub(
+        __import__('githubkit').TokenAuthStrategy(config['pat']),
+        timeout=0.001, auto_retry=False, http_cache=False)
+
+    out = await run(tool, GitHubIssueListInput(
+        operation='list_issues', owner=OWNER, repo=REPO, max_results=100))
+    error = out.get('api_error') or ''
+    check('a timeout is reported as a timeout', 'timed out' in error, error[:140])
+    check('the timeout warns that a mutation may have applied',
+          'may or may not have been applied' in error, error[:140])
+
 
 async def test_validation():
     print("\n4. Input validation and operation routing")
@@ -362,6 +409,7 @@ async def main():
         await test_list_and_search(tool, number)
         await test_guards()
         await test_error_mapping()
+        await test_timeout_branch()
         await test_validation()
     finally:
         await cleanup(tool, number)

@@ -284,6 +284,31 @@ def test_list_pagination():
     check('returned_count agrees with the payload',
           out.get('returned_count') == len(issues), str(out.get('returned_count')))
 
+    # list_issues can consume several pages internally, so page+1 is not
+    # necessarily the next unseen page. next_page is what the caller must use.
+    first_next = out.get('next_page')
+    check('truncated results advertise a next_page',
+          (first_next is not None) if out.get('truncated') else (first_next is None),
+          f"truncated={out.get('truncated')} next_page={first_next}")
+
+    if first_next:
+        status, body2 = call({'operation': 'list_issues', 'owner': OWNER, 'repo': REPO,
+                              'state': 'all', 'max_results': 3, 'page': first_next})
+        out2 = tool_output(body2)
+        first_ids = {i['number'] for i in issues}
+        second_ids = {i['number'] for i in out2.get('issues', [])}
+        check('following next_page returns no duplicates from the first batch',
+              not (first_ids & second_ids),
+              f"overlap={sorted(first_ids & second_ids)}")
+
+    # Single-page operations report next_page on the same contract.
+    status, body = call({'operation': 'list_comments', 'owner': OWNER, 'repo': REPO,
+                         'issue_number': 1, 'max_results': 100})
+    out = tool_output(body)
+    check('single-page list_comments has a coherent next_page',
+          out.get('next_page') is None or out.get('truncated') is True,
+          f"truncated={out.get('truncated')} next_page={out.get('next_page')}")
+
 
 def test_pull_requests():
     print("\n4. Pull requests")

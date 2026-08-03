@@ -200,7 +200,7 @@ class GitHubIssueTool(AbstractTool):
             )
 
             raw = response.json() or []
-            batch = [self._map_issue(item) for item in raw]
+            batch = [i for i in (self._map_issue(item) for item in raw) if i is not None]
             if not vi.include_pull_requests:
                 batch = [i for i in batch if not i.is_pull_request]
             issues.extend(batch)
@@ -215,12 +215,17 @@ class GitHubIssueTool(AbstractTool):
         truncated = more_available or len(issues) > max_results
         issues = issues[:max_results]
 
+        # This operation may have consumed several pages, so the caller cannot
+        # infer the next page by incrementing their own. Report where to resume.
+        next_page = (page + 1) if more_available else None
+
         return GitHubIssueToolOutput(
             operation='list_issues',
             repository=full_name,
             issues=issues,
             returned_count=len(issues),
             truncated=truncated,
+            next_page=next_page,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -368,6 +373,7 @@ class GitHubIssueTool(AbstractTool):
             comments=comments[:max_results],
             returned_count=len(comments[:max_results]),
             truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -461,18 +467,40 @@ class GitHubIssueTool(AbstractTool):
                 failed_label = label
                 break
 
-        result = await self._issue_result(
-            'remove_labels', full_name, vi.owner, vi.repo, vi.issue_number
-        )
+        # The refresh is a further API call, so it can fail for the same reason the
+        # loop did (rate limit, timeout). Letting it raise would discard the
+        # partial-state report -- exactly the case this tracking exists for.
+        try:
+            result = await self._issue_result(
+                'remove_labels', full_name, vi.owner, vi.repo, vi.issue_number
+            )
+        except GitHubToolError as refresh_error:
+            logger.warning(
+                f"remove_labels refresh failed for {full_name}#{vi.issue_number}: "
+                f"{refresh_error.message}"
+            )
+            result = GitHubIssueToolOutput(
+                operation='remove_labels',
+                repository=full_name,
+                api_error=(
+                    f"Labels were changed but the issue could not be re-read, so the "
+                    f"current label set is unknown. {refresh_error.message}"
+                ),
+                api_status_code=refresh_error.status_code
+            )
+            if failure is None:
+                failure = refresh_error
 
         if failure is not None:
             not_attempted = [l for l in vi.labels
                              if l not in removed and l not in skipped and l != failed_label]
+            existing = f" {result.api_error}" if result.api_error else ""
             result.api_error = (
                 f"Partially applied: removed {removed or 'nothing'}; "
                 f"failed on {failed_label!r}; not attempted: {not_attempted or 'none'}. "
-                f"The issue's current labels are in this response. {failure.message}"
-            )
+                f"{'The issue-s current labels are in this response.' if result.issue else ''}"
+                f" {failure.message}{existing}"
+            ).replace('issue-s', "issue's")
             result.api_status_code = failure.status_code
 
         return result
@@ -548,6 +576,7 @@ class GitHubIssueTool(AbstractTool):
             returned_count=len(returned),
             total_count=raw.get('total_count'),
             truncated=truncated,
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 

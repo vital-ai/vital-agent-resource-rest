@@ -2,9 +2,11 @@ import logging
 import re
 from typing import Any, Callable, Optional, Set
 
-import httpx
 from githubkit import GitHub, TokenAuthStrategy
-from githubkit.exception import RequestFailed, GitHubException
+from githubkit.exception import (
+    RequestFailed, RequestTimeout, GitHubException,
+    PrimaryRateLimitExceeded, SecondaryRateLimitExceeded,
+)
 
 logger = logging.getLogger("VitalAgentContainerLogger")
 
@@ -226,10 +228,14 @@ class GitHubClient:
             response = await func(*args, **kwargs)
         except RequestFailed as e:
             raise self._map_request_failed(e, context)
-        except httpx.TimeoutException as e:
+        except RequestTimeout as e:
+            # githubkit wraps httpx.TimeoutException in its own RequestTimeout, so
+            # catching httpx.TimeoutException here would never fire and timeouts
+            # would fall through to the generic branch below.
             raise GitHubToolError(
                 f"GitHub request timed out after {self.timeout}s{self._suffix(context)}. "
-                f"The operation may or may not have been applied. ({e})"
+                f"The operation may or may not have been applied -- check state before "
+                f"retrying a mutation. ({e})"
             )
         except GitHubException as e:
             raise GitHubToolError(f"GitHub request failed{self._suffix(context)}: {e}")
@@ -271,8 +277,19 @@ class GitHubClient:
         # 403 with retry-after and no remaining=0 (secondary), and 429. Only the
         # first was handled before, so secondary limits were reported as a
         # permissions problem and sent the caller chasing token scopes.
+        # githubkit already classifies these and both subclass RequestFailed, so
+        # they arrive here rather than escaping. Trust its verdict first and fall
+        # back to header sniffing for anything it did not label.
+        if isinstance(error, SecondaryRateLimitExceeded):
+            kind_hint = 'secondary'
+        elif isinstance(error, PrimaryRateLimitExceeded):
+            kind_hint = 'primary'
+        else:
+            kind_hint = None
+
         is_rate_limited = (
-            status == 429
+            kind_hint is not None
+            or status == 429
             or (status == 403 and remaining == 0)
             or (status == 403 and retry_after is not None)
         )
@@ -283,7 +300,9 @@ class GitHubClient:
                 f"revoked. {detail}"
             )
         elif is_rate_limited:
-            kind = 'secondary' if retry_after is not None and remaining != 0 else 'primary'
+            kind = kind_hint or (
+                'secondary' if retry_after is not None and remaining != 0 else 'primary'
+            )
             when = (f"Retry after {retry_after}s." if retry_after is not None
                     else f"Limit resets at epoch {reset}.")
             message = (

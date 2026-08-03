@@ -149,6 +149,7 @@ class GitHubActionsTool(AbstractTool):
             returned_count=len(workflows[:max_results]),
             total_count=raw.get('total_count'),
             truncated=(raw.get('total_count') or 0) > len(workflows[:max_results]),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -193,6 +194,7 @@ class GitHubActionsTool(AbstractTool):
             returned_count=len(returned),
             total_count=raw.get('total_count'),
             truncated=has_next_page(response) or (raw.get('total_count') or 0) > len(returned),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 

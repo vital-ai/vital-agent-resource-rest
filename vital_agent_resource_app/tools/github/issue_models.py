@@ -24,7 +24,13 @@ class GitHubIssueListInput(GitHubRepoBase):
         description="GitHub returns pull requests from the issues endpoint; set true to keep them"
     )
     max_results: Optional[int] = Field(30, description="Maximum issues to return", ge=1, le=100)
-    page: Optional[int] = Field(None, description="Page number for pagination", ge=1)
+    page: Optional[int] = Field(
+        None,
+        description="Page to start from. This operation may consume several pages to fill "
+                    "max_results after filtering out pull requests, so do not assume the "
+                    "next batch is page+1 -- pass the next_page value from the response.",
+        ge=1
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -109,7 +115,9 @@ class GitHubIssueCommentListInput(GitHubRepoBase):
     issue_number: int = Field(..., description="Issue number", ge=1)
     since: Optional[str] = Field(None, description="Only comments updated at or after this ISO 8601 timestamp")
     max_results: Optional[int] = Field(30, description="Maximum comments to return", ge=1, le=100)
-    page: Optional[int] = Field(None, description="Page number for pagination", ge=1)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
 
 
 class GitHubIssueCommentCreateInput(GitHubRepoBase):
@@ -182,7 +190,9 @@ class GitHubIssueSearchInput(GitHubRepoBase):
         False, description="Search matches pull requests too; set true to keep them"
     )
     max_results: Optional[int] = Field(30, description="Maximum results to return", ge=1, le=100)
-    page: Optional[int] = Field(None, description="Page number for pagination", ge=1)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
 
     model_config = {
         "json_schema_extra": {

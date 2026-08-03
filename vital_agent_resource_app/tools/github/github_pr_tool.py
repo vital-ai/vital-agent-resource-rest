@@ -159,6 +159,7 @@ class GitHubPRTool(AbstractTool):
             pull_requests=prs[:max_results],
             returned_count=len(prs[:max_results]),
             truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -249,6 +250,7 @@ class GitHubPRTool(AbstractTool):
             files=files[:max_results],
             returned_count=len(files[:max_results]),
             truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -276,6 +278,7 @@ class GitHubPRTool(AbstractTool):
             comments=comments[:max_results],
             returned_count=len(comments[:max_results]),
             truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 

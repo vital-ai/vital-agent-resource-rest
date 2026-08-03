@@ -22,6 +22,13 @@ class GitHubOutputBase(BaseModel):
                     "over total_count when deciding what you received."
     )
     truncated: bool = Field(False, description="True if more results existed than were returned")
+    next_page: Optional[int] = Field(
+        None,
+        description="Page number to request for the next batch, or null if there is no "
+                    "more. Use this rather than incrementing `page` yourself: some "
+                    "operations consume several pages internally, so the next unseen "
+                    "page is not always page+1."
+    )
     api_error: Optional[str] = Field(None, description="Error message if the GitHub API call failed")
     api_status_code: Optional[int] = Field(None, description="GitHub API status code if the call failed")
     rate_limit_remaining: Optional[int] = Field(None, description="Requests remaining in the current rate limit window")
