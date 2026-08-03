@@ -8,6 +8,9 @@ from vital_agent_resource_app.tools.place_search.models import PlaceSearchOutput
 from vital_agent_resource_app.tools.weather.models import WeatherOutput
 from vital_agent_resource_app.tools.web_search.models import WebSearchOutput
 from vital_agent_resource_app.tools.serper_web_search.models import SerperWebSearchOutput
+from vital_agent_resource_app.tools.github.issue_models import GitHubIssueToolOutput
+from vital_agent_resource_app.tools.github.pr_models import GitHubPRToolOutput
+from vital_agent_resource_app.tools.github.actions_models import GitHubActionsToolOutput
 from vital_agent_resource_app.tools.send_email.models import EmailOutput
 
 
@@ -22,6 +25,9 @@ class ToolResponse(BaseModel):
         WeatherOutput,
         WebSearchOutput,
         SerperWebSearchOutput,
+        GitHubIssueToolOutput,
+        GitHubPRToolOutput,
+        GitHubActionsToolOutput,
         EmailOutput,
         dict
         ]] = Field(None, description="Tool-specific output data")

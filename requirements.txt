@@ -1,4 +1,11 @@
+# Requires Python >= 3.12.
+# vital-ai-vitalsigns >=0.1.44 and kgraphservice >=0.0.8 declare requires_python
+# >=3.12. On 3.11 pip can only reach older vitalsigns releases while
+# vital-ai-domain >=0.1.9 requires >=0.1.54, which is unresolvable. The Dockerfile
+# and the vital-agent-resource-rest conda env are both on 3.12.
 
+vital-ai-vitalsigns>=0.1.55
+vital-ai-haley-kg>=0.1.24
 kgraphservice>=0.0.7
 requests
 uvicorn[standard]==0.27.0.post1
@@ -9,6 +16,7 @@ pyyaml
 google-search-results>=2.4.2
 vital-llm-cluster-mgr>=0.0.5
 httpx
+githubkit>=0.11.0
 vital-agentbox>=0.0.2
 PyJWT>=2.8.0
 python-dotenv

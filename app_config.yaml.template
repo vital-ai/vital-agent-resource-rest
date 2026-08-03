@@ -11,6 +11,14 @@ vital_agent_resource_app:
     - tool_id: "loop_message_tool"
       authorization_key: "your_loop_message_authorization_key_here"
       secret_key: "your_loop_message_secret_key_here"
+    # Shared credential block for the github_* tools. No tool is registered
+    # under this name; owner/repo are given per request, not configured here.
+    - tool_id: "github_tool"
+      pat: "your_github_pat_here"
+      allowed_repos: "your_org/your_repo"
+      allow_writes: "true"
+      allow_pr_merge: "false"
+      allow_workflow_dispatch: "false"
     - tool_id: "send_email_tool"
       api_key: "your_mailgun_api_key_here"
       domain: "your_mailgun_domain_here"

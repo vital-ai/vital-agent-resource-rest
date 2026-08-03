@@ -1,243 +1,452 @@
 #!/usr/bin/env python3
 
 import json
-import requests
 import sys
 import os
+from dotenv import load_dotenv
+
+# Add parent directory to path to import the tool
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+load_dotenv()
+
+from vital_agent_resource_app.tools.web_search.google_web_search_tool import GoogleWebSearchTool
+from vital_agent_resource_app.tools.web_search.models import WebSearchInput
+from vital_agent_resource_app.tools.tool_request import ToolRequest
 
 def test_google_web_search_tool():
-    """Test the Google Web Search Tool with enhanced features"""
+    """Test the Google Web Search Tool directly with enhanced features"""
     
-    # Test URL - adjust if your server runs on a different port
-    base_url = "http://localhost:8008"
-    
-    print("Testing Google Web Search Tool with Enhanced Features...")
+    print("Testing Google Web Search Tool Directly (No API)")
     print("=" * 60)
     
-    # Test 1: Basic web search with multiple result types
-    print("\n1. Testing Enhanced Web Search (Multiple Result Types):")
-    test_enhanced_search(base_url)
+    # Initialize the tool with config
+    api_key = os.getenv('DEV__TOOL__GOOGLE_WEB_SEARCH__API_KEY')
+    
+    print(f"\nAPI Key Debug:")
+    print(f"  Environment variable exists: {api_key is not None}")
+    print(f"  API key length: {len(api_key) if api_key else 0}")
+    print(f"  API key value: {api_key}")
+    
+    if not api_key:
+        print("❌ Error: DEV__TOOL__GOOGLE_WEB_SEARCH__API_KEY not found in environment")
+        return
+    
+    config = {
+        'tool_id': 'google_web_search_tool',
+        'api_key': api_key
+    }
+    
+    print(f"\nTool Config:")
+    print(f"  {config}")
+    
+    tool = GoogleWebSearchTool(config)
+    
+    print(f"\nTool Instance Config:")
+    print(f"  tool.config = {tool.config}")
+    print(f"  tool.config.get('api_key') = {tool.config.get('api_key')}")
+    
+    # Test 1: Basic web search
+    print("\n1. Testing Basic Web Search:")
+    test_basic_search(tool)
     
     # Test 2: Recipe search
     print("\n2. Testing Recipe Search:")
-    test_recipe_search(base_url)
+    test_recipe_search(tool)
     
     # Test 3: Shopping search
     print("\n3. Testing Shopping Search:")
-    test_shopping_search(base_url)
+    test_shopping_search(tool)
     
-    # Test 4: Local search
+    # Test 4: Local search (tbm=lcl) with place_id/ludocid extraction
     print("\n4. Testing Local Search:")
-    test_local_search(base_url)
+    test_local_search(tool)
     
-    # Test 5: Knowledge graph search
-    print("\n5. Testing Knowledge Graph Search:")
-    test_knowledge_graph_search(base_url)
+    # Test 5: ALM RV LLC local search
+    print("\n5. Testing ALM RV LLC Local Search:")
+    test_alm_rv_local_search(tool)
+    
+    # Test 6: ALM RV LLC regular search (previously 'Unknown API error')
+    print("\n6. Testing ALM RV LLC Regular Search:")
+    test_alm_rv_regular_search(tool)
+    
+    # Test 7: ALM RV LLC ludocid deep-dive
+    print("\n7. Testing ALM RV LLC ludocid deep-dive:")
+    test_alm_rv_ludocid(tool)
 
-def test_enhanced_search(base_url):
-    """Test enhanced web search with multiple result types"""
-    payload = {
-        "tool": "google_web_search_tool",
-        "tool_input": {
-            "search_query": "apple pie recipe",
-            "num_results": 10
-        }
-    }
-    
+def test_basic_search(tool):
+    """Test basic web search with multiple result types"""
     try:
-        response = requests.post(f"{base_url}/tool", json=payload)
-        print(f"Status Code: {response.status_code}")
+        # Create tool input
+        tool_input = WebSearchInput(
+            search_query="Python programming tutorials",
+            num_results=5
+        )
         
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Enhanced search successful!")
-            print(f"Full Response: {result}")
+        # Create tool request
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching for: '{tool_input.search_query}'")
+        
+        # Execute the tool
+        response = tool.handle_tool_request(tool_request)
+        
+        print(f"Success: {response.success}")
+        
+        if response.success and response.tool_output:
+            tool_output = response.tool_output
+            print(f"Query: {tool_output.query}")
             
-            # Handle different response structures
-            if 'tool_output' in result and result['tool_output'] is not None:
-                tool_output = result['tool_output']
-                print(f"Query: {tool_output.get('query', 'N/A')}")
-                print(f"Total Results: {tool_output.get('total_results', 'N/A')}")
-                
-                # Analyze result types
-                results = tool_output.get('results', [])
-                result_types = {}
-                for res in results:
-                    res_type = res.get('result_type', 'unknown')
-                    result_types[res_type] = result_types.get(res_type, 0) + 1
-                
-                print(f"Result Types Found: {result_types}")
-                
-                # Check for knowledge graph
-                kg = tool_output.get('knowledge_graph')
-                if kg:
-                    print(f"Knowledge Graph: {kg.get('title', 'N/A')} - {kg.get('type', 'N/A')}")
-                
-                # Check for related questions
-                rq = tool_output.get('related_questions', [])
-                if rq:
-                    print(f"Related Questions: {len(rq)} found")
-                    print(f"  First Question: {rq[0].get('question', 'N/A')}")
-            else:
-                print("❌ No tool_output in response or tool_output is None")
-                if 'error_message' in result:
-                    print(f"Error: {result['error_message']}")
-                
+            # Check for API errors
+            if tool_output.api_error:
+                print(f"\n⚠️  API Error Detected:")
+                print(f"  Status Code: {tool_output.api_status_code}")
+                print(f"  Error Message: {tool_output.api_error[:200]}")
+                print("\n❌ Search failed due to API error")
+                return
+            
+            print(f"Total Results: {tool_output.total_results}")
+            
+            # Analyze result types
+            results = tool_output.results
+            result_types = {}
+            for res in results:
+                res_type = res.result_type
+                result_types[res_type] = result_types.get(res_type, 0) + 1
+            
+            print(f"Result Types Found: {result_types}")
+            print(f"Results returned: {len(results)}")
+            
+            # Show first result
+            if results:
+                first = results[0]
+                print(f"\nFirst Result:")
+                print(f"  Title: {first.title}")
+                print(f"  Link: {first.link}")
+                print(f"  Type: {first.result_type}")
+            
+            print("✅ Basic search successful!")
         else:
-            print(f"❌ Enhanced search failed with status {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"❌ Search failed: {response.error_message}")
             
     except Exception as e:
-        print(f"❌ Enhanced search error: {e}")
+        print(f"❌ Basic search error: {e}")
+        import traceback
+        traceback.print_exc()
 
-def test_recipe_search(base_url):
+def test_recipe_search(tool):
     """Test recipe-focused search"""
-    payload = {
-        "tool": "google_web_search_tool",
-        "tool_input": {
-            "search_query": "chocolate chip cookies recipe",
-            "num_results": 5
-        }
-    }
-    
     try:
-        response = requests.post(f"{base_url}/tool", json=payload)
-        print(f"Status Code: {response.status_code}")
+        tool_input = WebSearchInput(
+            search_query="chocolate chip cookies recipe",
+            num_results=5
+        )
         
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Recipe search successful!")
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching for: '{tool_input.search_query}'")
+        
+        response = tool.handle_tool_request(tool_request)
+        
+        if response.success and response.tool_output:
+            # Check for API errors
+            if response.tool_output.api_error:
+                print(f"⚠️  API Error: {response.tool_output.api_error[:200]}")
+                print(f"Status Code: {response.tool_output.api_status_code}")
+                return
             
-            results = result.get('tool_output', {}).get('results', [])
-            recipe_results = [r for r in results if r.get('result_type') == 'recipe']
+            results = response.tool_output.results
+            recipe_results = [r for r in results if r.result_type == 'recipe']
             
             print(f"Recipe Results Found: {len(recipe_results)}")
             for recipe in recipe_results[:2]:
-                print(f"  Recipe: {recipe.get('title', 'N/A')}")
-                if recipe.get('total_time'):
-                    print(f"    Time: {recipe.get('total_time')}")
-                if recipe.get('rating'):
-                    print(f"    Rating: {recipe.get('rating')}")
-                    
+                print(f"  Recipe: {recipe.title}")
+                if recipe.total_time:
+                    print(f"    Time: {recipe.total_time}")
+                if recipe.rating:
+                    print(f"    Rating: {recipe.rating}")
+            
+            print("✅ Recipe search successful!")
         else:
-            print(f"❌ Recipe search failed with status {response.status_code}")
+            print(f"❌ Recipe search failed: {response.error_message}")
             
     except Exception as e:
         print(f"❌ Recipe search error: {e}")
+        import traceback
+        traceback.print_exc()
 
-def test_shopping_search(base_url):
+def test_shopping_search(tool):
     """Test shopping search functionality"""
-    payload = {
-        "tool": "google_web_search_tool",
-        "tool_input": {
-            "search_query": "wireless headphones",
-            "num_results": 5,
-            "search_type": "shopping"
-        }
-    }
-    
     try:
-        response = requests.post(f"{base_url}/tool", json=payload)
-        print(f"Status Code: {response.status_code}")
+        tool_input = WebSearchInput(
+            search_query="wireless headphones",
+            num_results=5,
+            search_type="shopping"
+        )
         
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Shopping search successful!")
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching for: '{tool_input.search_query}' (shopping)")
+        
+        response = tool.handle_tool_request(tool_request)
+        
+        if response.success and response.tool_output:
+            # Check for API errors
+            if response.tool_output.api_error:
+                print(f"⚠️  API Error: {response.tool_output.api_error[:200]}")
+                print(f"Status Code: {response.tool_output.api_status_code}")
+                return
             
-            results = result.get('tool_output', {}).get('results', [])
-            shopping_results = [r for r in results if r.get('result_type') == 'shopping']
+            results = response.tool_output.results
+            shopping_results = [r for r in results if r.result_type == 'shopping']
             
             print(f"Shopping Results Found: {len(shopping_results)}")
             for product in shopping_results[:3]:
-                print(f"  Product: {product.get('title', 'N/A')}")
-                if product.get('price'):
-                    print(f"    Price: {product.get('price')}")
-                if product.get('rating'):
-                    print(f"    Rating: {product.get('rating')}")
-                    
+                print(f"  Product: {product.title}")
+                if product.price:
+                    print(f"    Price: {product.price}")
+                if product.rating:
+                    print(f"    Rating: {product.rating}")
+            
+            print("✅ Shopping search successful!")
         else:
-            print(f"❌ Shopping search failed with status {response.status_code}")
+            print(f"❌ Shopping search failed: {response.error_message}")
             
     except Exception as e:
         print(f"❌ Shopping search error: {e}")
+        import traceback
+        traceback.print_exc()
 
-def test_local_search(base_url):
-    """Test local search functionality"""
-    payload = {
-        "tool": "google_web_search_tool",
-        "tool_input": {
-            "search_query": "coffee shops near me",
-            "num_results": 5,
-            "location": "Austin, Texas"
-        }
-    }
-    
+def test_alm_rv_ludocid(tool):
+    """Deep-dive ALM RV LLC using ludocid from previous local search"""
     try:
-        response = requests.post(f"{base_url}/tool", json=payload)
-        print(f"Status Code: {response.status_code}")
+        tool_input = WebSearchInput(
+            search_query="ALM RV LLC",
+            ludocid="4103654625110011635"
+        )
         
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Local search successful!")
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching with ludocid: {tool_input.ludocid}")
+        
+        response = tool.handle_tool_request(tool_request)
+        
+        if response.success and response.tool_output:
+            if response.tool_output.api_error:
+                print(f"⚠️  API Error: {response.tool_output.api_error[:200]}")
+                return
             
-            results = result.get('tool_output', {}).get('results', [])
-            local_results = [r for r in results if r.get('result_type') == 'local']
+            results = response.tool_output.results
+            print(f"Results Found: {len(results)}")
+            
+            for r in results[:5]:
+                print(f"\n  [{r.result_type}] {r.title}")
+                if r.link:
+                    print(f"    Link: {r.link}")
+                if r.snippet:
+                    snippet = r.snippet[:150] + '...' if len(r.snippet) > 150 else r.snippet
+                    print(f"    Snippet: {snippet}")
+                if r.rating:
+                    print(f"    Rating: {r.rating} ({r.reviews} reviews)")
+                if r.address:
+                    print(f"    Address: {r.address}")
+                if r.phone:
+                    print(f"    Phone: {r.phone}")
+            
+            # Check knowledge graph
+            if response.tool_output.knowledge_graph:
+                kg = response.tool_output.knowledge_graph
+                print(f"\n  Knowledge Graph:")
+                print(f"    Title: {kg.title}")
+                print(f"    Type: {kg.type}")
+                if kg.description:
+                    print(f"    Description: {kg.description[:150]}")
+            
+            # Check related questions
+            if response.tool_output.related_questions:
+                print(f"\n  Related Questions ({len(response.tool_output.related_questions)}):")
+                for rq in response.tool_output.related_questions[:3]:
+                    print(f"    Q: {rq.question}")
+            
+            print("\n✅ ALM RV LLC ludocid deep-dive successful!")
+        else:
+            print(f"❌ ludocid search failed: {response.error_message}")
+            
+    except Exception as e:
+        print(f"❌ ALM RV LLC ludocid error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def test_alm_rv_local_search(tool):
+    """Test local search for ALM RV LLC - the business from the docker logs"""
+    try:
+        tool_input = WebSearchInput(
+            search_query="ALM RV LLC",
+            num_results=5,
+            search_type="local",
+            location="Norco,California"
+        )
+        
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching for: '{tool_input.search_query}' (local, location={tool_input.location})")
+        
+        response = tool.handle_tool_request(tool_request)
+        
+        if response.success and response.tool_output:
+            if response.tool_output.api_error:
+                print(f"⚠️  API Error: {response.tool_output.api_error[:200]}")
+                return
+            
+            results = response.tool_output.results
+            local_results = [r for r in results if r.result_type == 'local']
             
             print(f"Local Results Found: {len(local_results)}")
-            for place in local_results[:2]:
-                print(f"  Place: {place.get('title', 'N/A')}")
-                if place.get('address'):
-                    print(f"    Address: {place.get('address')}")
-                if place.get('rating'):
-                    print(f"    Rating: {place.get('rating')}")
-                    
+            for place in local_results[:5]:
+                print(f"\n  Business: {place.title}")
+                if place.address:
+                    print(f"    Address: {place.address}")
+                if place.phone:
+                    print(f"    Phone: {place.phone}")
+                if place.rating:
+                    print(f"    Rating: {place.rating} ({place.reviews} reviews)")
+                if place.hours:
+                    print(f"    Hours: {place.hours}")
+                if place.place_id:
+                    print(f"    Place ID (ludocid): {place.place_id}")
+                else:
+                    print(f"    Place ID: NOT FOUND")
+            
+            if local_results:
+                print("✅ ALM RV LLC local search successful!")
+            else:
+                print("⚠️  No local results found for ALM RV LLC")
         else:
-            print(f"❌ Local search failed with status {response.status_code}")
+            print(f"❌ Local search failed: {response.error_message}")
+            
+    except Exception as e:
+        print(f"❌ ALM RV LLC local search error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def test_alm_rv_regular_search(tool):
+    """Test the exact query from docker logs that previously returned 'Unknown API error'"""
+    try:
+        tool_input = WebSearchInput(
+            search_query='site:maps.google.com "ALM RV LLC" Norco reviews',
+            num_results=5
+        )
+        
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching for: '{tool_input.search_query}'")
+        
+        response = tool.handle_tool_request(tool_request)
+        
+        if response.success and response.tool_output:
+            if response.tool_output.api_error:
+                print(f"⚠️  API Error: {response.tool_output.api_error[:200]}")
+                print("❌ Still getting an API error!")
+                return
+            
+            results = response.tool_output.results
+            print(f"Results Found: {len(results)}")
+            if results:
+                for r in results[:3]:
+                    print(f"  [{r.result_type}] {r.title} - {r.link}")
+            else:
+                print("  (0 results - this is expected, no longer an error)")
+            
+            print("✅ No 'Unknown API error' - fix confirmed!")
+        else:
+            print(f"❌ Search failed: {response.error_message}")
+            
+    except Exception as e:
+        print(f"❌ ALM RV regular search error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def test_local_search(tool):
+    """Test local search (tbm=lcl) with place_id/ludocid extraction"""
+    try:
+        tool_input = WebSearchInput(
+            search_query="plumber",
+            num_results=5,
+            search_type="local",
+            location="Austin,Texas"
+        )
+        
+        tool_request = ToolRequest(
+            tool="google_web_search_tool",
+            tool_input=tool_input
+        )
+        
+        print(f"Searching for: '{tool_input.search_query}' (local, location={tool_input.location})")
+        
+        response = tool.handle_tool_request(tool_request)
+        
+        if response.success and response.tool_output:
+            if response.tool_output.api_error:
+                print(f"⚠️  API Error: {response.tool_output.api_error[:200]}")
+                return
+            
+            results = response.tool_output.results
+            local_results = [r for r in results if r.result_type == 'local']
+            
+            print(f"Local Results Found: {len(local_results)}")
+            
+            for place in local_results[:5]:
+                print(f"\n  Business: {place.title}")
+                if place.address:
+                    print(f"    Address: {place.address}")
+                if place.phone:
+                    print(f"    Phone: {place.phone}")
+                if place.rating:
+                    print(f"    Rating: {place.rating} ({place.reviews} reviews)")
+                if place.hours:
+                    print(f"    Hours: {place.hours}")
+                if place.place_id:
+                    print(f"    Place ID (ludocid): {place.place_id}")
+                else:
+                    print(f"    Place ID: NOT FOUND")
+            
+            # Summary
+            with_place_id = [r for r in local_results if r.place_id]
+            print(f"\n  Results with place_id (ludocid): {len(with_place_id)}/{len(local_results)}")
+            
+            if with_place_id:
+                print("✅ Local search successful - ludocid extracted!")
+            else:
+                print("⚠️  Local search returned results but no place_id/ludocid found")
+        else:
+            print(f"❌ Local search failed: {response.error_message}")
             
     except Exception as e:
         print(f"❌ Local search error: {e}")
+        import traceback
+        traceback.print_exc()
 
-def test_knowledge_graph_search(base_url):
-    """Test search that should return knowledge graph"""
-    payload = {
-        "tool": "google_web_search_tool",
-        "tool_input": {
-            "search_query": "Albert Einstein",
-            "num_results": 5
-        }
-    }
-    
-    try:
-        response = requests.post(f"{base_url}/tool", json=payload)
-        print(f"Status Code: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Knowledge graph search successful!")
-            
-            tool_output = result.get('tool_output', {})
-            kg = tool_output.get('knowledge_graph')
-            
-            if kg:
-                print("Knowledge Graph Found:")
-                print(f"  Title: {kg.get('title', 'N/A')}")
-                print(f"  Type: {kg.get('type', 'N/A')}")
-                print(f"  Description: {kg.get('description', 'N/A')[:100]}...")
-            else:
-                print("No Knowledge Graph found in results")
-                
-            # Check related questions
-            rq = tool_output.get('related_questions', [])
-            if rq:
-                print(f"Related Questions Found: {len(rq)}")
-                for i, question in enumerate(rq[:3]):
-                    print(f"  Q{i+1}: {question.get('question', 'N/A')}")
-                    
-        else:
-            print(f"❌ Knowledge graph search failed with status {response.status_code}")
-            
-    except Exception as e:
-        print(f"❌ Knowledge graph search error: {e}")
 
 if __name__ == "__main__":
     test_google_web_search_tool()

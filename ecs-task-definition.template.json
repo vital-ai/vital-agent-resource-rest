@@ -1,19 +1,20 @@
 {
-  "family": "vital-agent-resource-rest",
+  "family": "vital-agent-resource-rest-prod",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "1024",
   "memory": "2048",
-  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/vital-agent-resource-task-role",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/YOUR_APP-production-ECSTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/YOUR_APP-production-ECSTaskRole",
   "containerDefinitions": [
     {
-      "name": "vital-agent-resource-app",
-      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/vital-agent-resource-rest:latest",
+      "name": "tool-server",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/vital-agent-resource-rest:IMAGE_TAG",
       "essential": true,
       "portMappings": [
         {
           "containerPort": 8008,
+          "hostPort": 8008,
           "protocol": "tcp"
         }
       ],
@@ -21,6 +22,10 @@
         {
           "name": "VITAL_ENV",
           "value": "PROD"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "REGION"
         },
         {
           "name": "PROD__APP__LOG_LEVEL",
@@ -35,6 +40,10 @@
           "value": "8008"
         },
         {
+          "name": "PROD__JWT__ENABLED",
+          "value": "true"
+        },
+        {
           "name": "PROD__JWT__ALGORITHM",
           "value": "RS256"
         },
@@ -45,88 +54,106 @@
         {
           "name": "PROD__JWT__TOKEN_EXPIRY_SECONDS",
           "value": "3600"
+        },
+        {
+          "name": "PROD__JWT__ISSUER",
+          "value": "KEYCLOAK_ISSUER_URL"
+        },
+        {
+          "name": "PROD__JWT__JWKS_URL",
+          "value": "KEYCLOAK_JWKS_URL"
+        },
+        {
+          "name": "PROD__JWT__AUDIENCE",
+          "value": "account"
+        },
+        {
+          "name": "JWT_LEEWAY",
+          "value": "30"
+        },
+        {
+          "name": "JWT_ENFORCEMENT_MODE",
+          "value": "header"
+        },
+        {
+          "name": "PROD__TOOL__SEND_EMAIL__DOMAIN",
+          "value": "MAIL_DOMAIN"
+        },
+        {
+          "name": "PROD__TOOL__SEND_EMAIL__FROM_EMAIL",
+          "value": "FROM_EMAIL_ADDRESS"
+        },
+        {
+          "name": "PROD__TOOL__GITHUB__ALLOWED_REPOS",
+          "value": "GITHUB_ALLOWED_REPOS"
+        },
+        {
+          "name": "PROD__TOOL__GITHUB__ALLOW_WRITES",
+          "value": "true"
+        },
+        {
+          "name": "PROD__TOOL__GITHUB__ALLOW_PR_MERGE",
+          "value": "false"
+        },
+        {
+          "name": "PROD__TOOL__GITHUB__ALLOW_WORKFLOW_DISPATCH",
+          "value": "false"
         }
       ],
       "secrets": [
         {
           "name": "PROD__TOOL__WEATHER__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/weather-api-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__WEATHER__API_KEY::"
         },
         {
           "name": "PROD__TOOL__PLACE_SEARCH__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/place-search-api-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__PLACE_SEARCH__API_KEY::"
         },
         {
           "name": "PROD__TOOL__GOOGLE_WEB_SEARCH__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/google-web-search-api-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__GOOGLE_WEB_SEARCH__API_KEY::"
         },
         {
           "name": "PROD__TOOL__GOOGLE_ADDRESS_VALIDATION__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/google-address-validation-api-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__GOOGLE_ADDRESS_VALIDATION__API_KEY::"
         },
         {
           "name": "PROD__TOOL__LOOP_LOOKUP__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/loop-lookup-api-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__LOOP_LOOKUP__API_KEY::"
         },
         {
           "name": "PROD__TOOL__LOOP_MESSAGE__AUTHORIZATION_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/loop-message-authorization-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__LOOP_MESSAGE__AUTHORIZATION_KEY::"
         },
         {
           "name": "PROD__TOOL__LOOP_MESSAGE__SECRET_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/loop-message-secret-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__LOOP_MESSAGE__SECRET_KEY::"
         },
         {
           "name": "PROD__TOOL__SEND_EMAIL__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/send-email-api-key"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__SEND_EMAIL__API_KEY::"
         },
         {
-          "name": "PROD__TOOL__SEND_EMAIL__DOMAIN",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/send-email-domain"
-        },
-        {
-          "name": "PROD__TOOL__SEND_EMAIL__FROM_EMAIL",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/tools/send-email-from-email"
+          "name": "PROD__TOOL__GITHUB__PAT",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__TOOL__GITHUB__PAT::"
         },
         {
           "name": "PROD__RUNPOD__API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/runpod-api-key"
-        },
-        {
-          "name": "PROD__JWT__ENABLED",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-enabled"
-        },
-        {
-          "name": "PROD__JWT__JWKS_URL",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-jwks-url"
-        },
-        {
-          "name": "PROD__JWT__ISSUER",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-issuer"
-        },
-        {
-          "name": "PROD__JWT__AUDIENCE",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/jwt-audience"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__RUNPOD__API_KEY::"
         },
         {
           "name": "PROD__APP__CORS_ORIGINS",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:prod/app-cors-origins"
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__APP__CORS_ORIGINS::"
         }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/vital-agent-resource-rest",
+          "awslogs-group": "/ecs/vital-agent-resource-rest-prod",
+          "awslogs-create-group": "true",
           "awslogs-region": "REGION",
           "awslogs-stream-prefix": "ecs"
         }
-      },
-      "healthCheck": {
-        "command": ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"],
-        "interval": 30,
-        "timeout": 5,
-        "retries": 3,
-        "startPeriod": 60
       }
     }
   ]

@@ -65,12 +65,25 @@ from vital_agent_resource_app.tools.send_message.models import (
 from vital_agent_resource_app.tools.send_email.models import (
     EmailInput, EmailOutput
 )
+from vital_agent_resource_app.tools.github.issue_models import (
+    GitHubIssueToolInput, GitHubIssueToolOutput
+)
+from vital_agent_resource_app.tools.github.pr_models import (
+    GitHubPRToolInput, GitHubPRToolOutput
+)
+from vital_agent_resource_app.tools.github.actions_models import (
+    GitHubActionsToolInput, GitHubActionsToolOutput
+)
 from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
 from vital_agent_resource_app.tools.web_search.google_web_search_tool import GoogleWebSearchTool
 from vital_agent_resource_app.tools.serper_web_search.serper_web_search_tool import SerperWebSearchTool
 from vital_agent_resource_app.tools.send_message.loop_lookup_tool import LoopLookupTool
 from vital_agent_resource_app.tools.send_message.send_loop_message_tool import LoopMessageTool
 from vital_agent_resource_app.tools.send_email.send_email_tool import SendEmailTool
+from vital_agent_resource_app.tools.github.github_client import GitHubClient
+from vital_agent_resource_app.tools.github.github_issue_tool import GitHubIssueTool
+from vital_agent_resource_app.tools.github.github_pr_tool import GitHubPRTool
+from vital_agent_resource_app.tools.github.github_actions_tool import GitHubActionsTool
 
 # Import model modules to register tools
 from vital_agent_resource_app.tools.google_address_validation import models as address_models
@@ -121,6 +134,12 @@ send_email_config = get_tool_by_id(config, 'send_email_tool')
 
 serper_web_search_config = get_tool_by_id(config, 'serper_web_search_tool')
 
+# Shared credential block for all github_* tools. There is deliberately no tool
+# registered under the name 'github_tool' -- it is one PAT and one repo
+# allowlist shared by the issue/PR/actions tools.
+github_config = get_tool_by_id(config, 'github_tool')
+github_client = GitHubClient(github_config)
+
 
 # Instantiate tool registry
 tool_registry = ToolRegistry()
@@ -159,6 +178,27 @@ tool_registry.add_tool(
     input_model=SerperWebSearchInput,
     output_model=SerperWebSearchOutput,
     tool_instance=SerperWebSearchTool(serper_web_search_config)
+)
+
+tool_registry.add_tool(
+    tool_name=ToolName.github_issue_tool.value,
+    input_model=GitHubIssueToolInput,
+    output_model=GitHubIssueToolOutput,
+    tool_instance=GitHubIssueTool(github_config, github_client)
+)
+
+tool_registry.add_tool(
+    tool_name=ToolName.github_pr_tool.value,
+    input_model=GitHubPRToolInput,
+    output_model=GitHubPRToolOutput,
+    tool_instance=GitHubPRTool(github_config, github_client)
+)
+
+tool_registry.add_tool(
+    tool_name=ToolName.github_actions_tool.value,
+    input_model=GitHubActionsToolInput,
+    output_model=GitHubActionsToolOutput,
+    tool_instance=GitHubActionsTool(github_config, github_client)
 )
 
 tool_registry.add_tool(

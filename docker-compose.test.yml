@@ -1,0 +1,122 @@
+# docker-compose.test.yml
+#
+# Ephemeral test stack for the agent resource service.
+#
+# Key differences from docker-compose.yml:
+#   - Distinct project name (varr-test) so images, networks and containers do
+#     not collide with the dev stack
+#   - Non-default host ports (8018 instead of 8008) so it runs alongside dev
+#   - JWT disabled, so the pipeline needs no Keycloak and no token plumbing
+#   - A `tests` service that runs the suite in-network and sets the exit code
+#   - No volumes -- every `up` starts from the built image
+#
+# Python version
+# --------------
+# The image is python:3.12-slim. It cannot be 3.11: vital-ai-vitalsigns >=0.1.44
+# and kgraphservice >=0.0.8 declare requires_python >=3.12, and on 3.11 pip can
+# only reach older vitalsigns releases while vital-ai-domain requires >=0.1.54.
+#
+# There is also ./scripts/run_test_pipeline_local.sh, which runs the same service
+# and the same suite from the conda env instead of a container -- useful for
+# iterating on a test without a rebuild.
+#
+# Usage
+# -----
+# Run the whole pipeline and get a pass/fail exit code:
+#
+#   docker compose -f docker-compose.test.yml up --build \
+#     --abort-on-container-exit --exit-code-from tests
+#   docker compose -f docker-compose.test.yml down
+#
+# Or via the wrapper, which also tears down afterwards:
+#
+#   ./scripts/run_test_pipeline.sh
+#
+# Bring the stack up and poke at it by hand (service on :8018):
+#
+#   docker compose -f docker-compose.test.yml up -d --build app
+#   curl http://localhost:8018/health
+#   docker compose -f docker-compose.test.yml down
+#
+# Credentials
+# -----------
+# Secrets come from the project .env via env_file. The GitHub tests need
+# DEV__TOOL__GITHUB__PAT, DEV__TOOL__GITHUB__ALLOWED_REPOS, and
+# GITHUB_TEST_OWNER / GITHUB_TEST_REPO. The tests write to the scratch repo
+# named by those last two -- point them at a sandbox, never a real repo.
+#
+# The `environment` block below overrides env_file, so the JWT and port
+# settings here win over whatever .env carries.
+#
+# Why JWT is off
+# --------------
+# With DEV__JWT__ENABLED=false the /tool dependency substitutes a default dev
+# user, so the pipeline is self-contained. That means this stack does NOT
+# exercise the auth path -- github_issue_tool_client_test.py covers that
+# separately against a Keycloak-backed stack, and must be run by hand.
+
+name: varr-test
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: varr-test-app
+    ports:
+      - "8018:8008"
+    env_file:
+      - .env
+    environment:
+      - VITAL_ENV=DEV
+      # Self-contained: no Keycloak in this stack.
+      - DEV__JWT__ENABLED=false
+      - DEV__APP__PORT=8008
+      - DEV__APP__HOST=0.0.0.0
+      # Writes are needed -- the pipeline creates and closes issues.
+      - DEV__TOOL__GITHUB__ALLOW_WRITES=true
+      # Left off deliberately: the pipeline must not be able to merge PRs or
+      # trigger CI even if a future test asks it to.
+      - DEV__TOOL__GITHUB__ALLOW_PR_MERGE=false
+      - DEV__TOOL__GITHUB__ALLOW_WORKFLOW_DISPATCH=false
+      # No RunPod cluster in the test stack; keeps startup noise down.
+      - DEV__RUNPOD__API_KEY=
+    healthcheck:
+      # python:3.12-slim has no curl, so probe with the stdlib.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8008/health', timeout=3).status==200 else 1)\""]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - varr_test
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: varr-test-runner
+    env_file:
+      - .env
+    environment:
+      # In-network, so the container port applies rather than the host mapping.
+      - TOOL_SERVICE_URL=http://app:8008
+      - GITHUB_TEST_OWNER=${GITHUB_TEST_OWNER}
+      - GITHUB_TEST_REPO=${GITHUB_TEST_REPO}
+      - SERVICE_WAIT_SECONDS=90
+      - PYTHONUNBUFFERED=1
+    # .dockerignore excludes tests/ from the image, deliberately -- the app image
+    # should not ship the suite. Mount it read-only for the runner instead, which
+    # also means editing a test does not require a rebuild.
+    volumes:
+      - ./tests:/usr/src/app/tests:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["python", "tests/github_tools_pipeline_test.py"]
+    networks:
+      - varr_test
+
+networks:
+  varr_test:
+    driver: bridge

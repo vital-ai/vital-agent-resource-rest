@@ -8,6 +8,15 @@ from vital_agent_resource_app.tools.place_search.models import PlaceSearchInput
 from vital_agent_resource_app.tools.weather.models import WeatherInput
 from vital_agent_resource_app.tools.web_search.models import WebSearchInput
 from vital_agent_resource_app.tools.serper_web_search.models import SerperWebSearchInput
+from vital_agent_resource_app.tools.github.issue_models import (
+    GitHubIssueToolInput, GITHUB_ISSUE_OPERATION_MODELS
+)
+from vital_agent_resource_app.tools.github.pr_models import (
+    GitHubPRToolInput, GITHUB_PR_OPERATION_MODELS
+)
+from vital_agent_resource_app.tools.github.actions_models import (
+    GitHubActionsToolInput, GITHUB_ACTIONS_OPERATION_MODELS
+)
 from vital_agent_resource_app.tools.send_email.models import EmailInput
 from vital_agent_resource_app.tools.send_message.models import (
     LoopLookupSingleInput, LoopLookupBulkInput, LoopLookupStatusInput,
@@ -31,7 +40,10 @@ ToolInputType = Union[
     LoopMessageAudioInput,
     LoopMessageReactionInput,
     LoopMessageStatusInput,
-    SerperWebSearchInput
+    SerperWebSearchInput,
+    GitHubIssueToolInput,
+    GitHubPRToolInput,
+    GitHubActionsToolInput
 ]
 
 # Map tool names to their primary input model for disambiguation
@@ -42,6 +54,10 @@ _TOOL_INPUT_MODEL_MAP = {
     ToolName.google_web_search_tool: WebSearchInput,
     ToolName.serper_web_search_tool: SerperWebSearchInput,
     ToolName.send_email_tool: EmailInput,
+    # Multi-operation tool: operation string -> input model
+    ToolName.github_issue_tool: GITHUB_ISSUE_OPERATION_MODELS,
+    ToolName.github_pr_tool: GITHUB_PR_OPERATION_MODELS,
+    ToolName.github_actions_tool: GITHUB_ACTIONS_OPERATION_MODELS,
 }
 
 def _get_json_schema_extra(schema, model_type):
@@ -71,6 +87,19 @@ class ToolRequest(BaseModel):
                 except ValueError:
                     return data
                 model_cls = _TOOL_INPUT_MODEL_MAP.get(tool_enum)
+                # Multi-operation tools map to {operation: Model} instead of a
+                # single model; their input models overlap too much for the
+                # Union to resolve on shape alone.
+                if isinstance(model_cls, dict):
+                    operation = tool_input.get('operation')
+                    if operation not in model_cls:
+                        # Falling through would produce one validation error per
+                        # union member, which is unreadable. Name the problem.
+                        raise ValueError(
+                            f"Tool '{tool_name}' requires a valid 'operation' in tool_input. "
+                            f"Got {operation!r}; expected one of: {', '.join(sorted(model_cls))}"
+                        )
+                    model_cls = model_cls[operation]
                 if model_cls:
                     data['tool_input'] = model_cls(**tool_input)
         return data

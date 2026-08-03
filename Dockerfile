@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+# 3.12, not 3.11: vital-ai-vitalsigns >=0.1.44 and kgraphservice >=0.0.8 declare
+# requires_python >=3.12. On 3.11 pip can only reach old vitalsigns releases while
+# vital-ai-domain 0.1.9 requires >=0.1.54, which is unresolvable. Matches the
+# vital-agent-resource-rest conda env (3.12).
+FROM python:3.12-slim
 
 WORKDIR /usr/src/app
 
