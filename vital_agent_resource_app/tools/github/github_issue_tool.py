@@ -1,7 +1,7 @@
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
@@ -21,6 +21,10 @@ from vital_agent_resource_app.tools.github.issue_models import (
 )
 
 logger = logging.getLogger("VitalAgentContainerLogger")
+
+# Cap on extra pages fetched when filtering shrinks a page. Bounds the number of
+# API calls one list request can cost.
+MAX_LIST_PAGES = 5
 
 
 def _parse_since(value: Optional[str]) -> Optional[datetime]:
@@ -137,7 +141,7 @@ class GitHubIssueTool(AbstractTool):
         try:
             output = await handler(validated_input)
             self._log_output(output)
-            return self._create_success_response(output.dict(), start_time)
+            return self._create_success_response(output.model_dump(), start_time)
         except GitHubToolError as e:
             # Expected failures (config, allowlist, gates, GitHub API errors) come
             # back as structured output so the agent can read the reason.
@@ -148,7 +152,7 @@ class GitHubIssueTool(AbstractTool):
                 api_error=e.message,
                 api_status_code=e.status_code
             )
-            return self._create_success_response(output.dict(), start_time)
+            return self._create_success_response(output.model_dump(), start_time)
         except Exception as e:
             logger.error(f"GitHub issue tool error during {operation}: {e}")
             return self._create_error_response(str(e), start_time)
@@ -175,33 +179,47 @@ class GitHubIssueTool(AbstractTool):
             kwargs['creator'] = vi.creator
         if vi.milestone:
             kwargs['milestone'] = vi.milestone
-        if vi.page:
-            kwargs['page'] = vi.page
         since = _parse_since(vi.since)
         if since:
             kwargs['since'] = since
 
-        response = await self.client.call(
-            self.client.gh.rest.issues.async_list_for_repo,
-            vi.owner, vi.repo, context=f"list_issues {full_name}", **kwargs
-        )
+        # GitHub returns pull requests from the issues endpoint, and filtering
+        # them out shrinks the page. Without this loop, asking for 30 issues on a
+        # PR-heavy repo silently returns far fewer -- so keep pulling pages until
+        # max_results real issues are collected or the pages run out.
+        issues: List[GitHubIssue] = []
+        page = vi.page or 1
+        more_available = False
+        response = None
 
-        raw = response.json() or []
-        issues = [self._map_issue(item) for item in raw]
+        for _ in range(MAX_LIST_PAGES):
+            kwargs['page'] = page
+            response = await self.client.call(
+                self.client.gh.rest.issues.async_list_for_repo,
+                vi.owner, vi.repo, context=f"list_issues {full_name} page={page}", **kwargs
+            )
 
-        # GitHub returns pull requests from the issues endpoint. Filter before
-        # truncating so max_results counts actual issues.
-        if not vi.include_pull_requests:
-            issues = [i for i in issues if not i.is_pull_request]
+            raw = response.json() or []
+            batch = [self._map_issue(item) for item in raw]
+            if not vi.include_pull_requests:
+                batch = [i for i in batch if not i.is_pull_request]
+            issues.extend(batch)
 
-        truncated = len(issues) > max_results or has_next_page(response)
+            more_available = has_next_page(response)
+            if len(issues) >= max_results or not more_available:
+                break
+            page += 1
+
+        # More exist if GitHub advertised another page, or if this pass gathered
+        # more than the caller asked for.
+        truncated = more_available or len(issues) > max_results
         issues = issues[:max_results]
 
         return GitHubIssueToolOutput(
             operation='list_issues',
             repository=full_name,
             issues=issues,
-            total_count=len(issues),
+            returned_count=len(issues),
             truncated=truncated,
             rate_limit_remaining=rate_limit_remaining(response)
         )
@@ -279,6 +297,17 @@ class GitHubIssueTool(AbstractTool):
         full_name = self.client.check_repo(vi.owner, vi.repo)
         self.client.check_write_allowed('close_issue')
 
+        # Close first, then comment. The reverse order leaves an orphaned comment
+        # on a still-open issue when the close fails, and the natural retry then
+        # posts it twice. The cost is that the comment lands after the close event
+        # in GitHub's timeline rather than before it.
+        response = await self.client.call(
+            self.client.gh.rest.issues.async_update,
+            vi.owner, vi.repo, vi.issue_number,
+            data={'state': 'closed', 'state_reason': vi.state_reason or 'completed'},
+            context=f"close_issue {full_name}#{vi.issue_number}"
+        )
+
         comment_out = None
         if vi.comment:
             comment_response = await self.client.call(
@@ -288,12 +317,6 @@ class GitHubIssueTool(AbstractTool):
             )
             comment_out = self._map_comment(comment_response.json())
 
-        response = await self.client.call(
-            self.client.gh.rest.issues.async_update,
-            vi.owner, vi.repo, vi.issue_number,
-            data={'state': 'closed', 'state_reason': vi.state_reason or 'completed'},
-            context=f"close_issue {full_name}#{vi.issue_number}"
-        )
         return GitHubIssueToolOutput(
             operation='close_issue',
             repository=full_name,
@@ -338,14 +361,13 @@ class GitHubIssueTool(AbstractTool):
 
         raw = response.json() or []
         comments = [self._map_comment(item) for item in raw]
-        truncated = len(comments) > max_results or has_next_page(response)
 
         return GitHubIssueToolOutput(
             operation='list_comments',
             repository=full_name,
             comments=comments[:max_results],
-            total_count=len(comments[:max_results]),
-            truncated=truncated,
+            returned_count=len(comments[:max_results]),
+            truncated=has_next_page(response),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -413,6 +435,14 @@ class GitHubIssueTool(AbstractTool):
         full_name = self.client.check_repo(vi.owner, vi.repo)
         self.client.check_write_allowed('remove_labels')
 
+        # One call per label, so a mid-loop failure leaves the issue partially
+        # updated. Track what happened and report it rather than raising with no
+        # record of which labels actually came off.
+        removed: List[str] = []
+        skipped: List[str] = []
+        failure: Optional[GitHubToolError] = None
+        failed_label = None
+
         for label in vi.labels:
             try:
                 await self.client.call(
@@ -420,14 +450,32 @@ class GitHubIssueTool(AbstractTool):
                     vi.owner, vi.repo, vi.issue_number, label,
                     context=f"remove_labels {full_name}#{vi.issue_number}"
                 )
+                removed.append(label)
             except GitHubToolError as e:
                 # Removing a label the issue does not carry is a no-op, not a failure.
                 if e.status_code == 404:
                     logger.info(f"Label {label!r} not present on {full_name}#{vi.issue_number}; skipping")
+                    skipped.append(label)
                     continue
-                raise
+                failure = e
+                failed_label = label
+                break
 
-        return await self._issue_result('remove_labels', full_name, vi.owner, vi.repo, vi.issue_number)
+        result = await self._issue_result(
+            'remove_labels', full_name, vi.owner, vi.repo, vi.issue_number
+        )
+
+        if failure is not None:
+            not_attempted = [l for l in vi.labels
+                             if l not in removed and l not in skipped and l != failed_label]
+            result.api_error = (
+                f"Partially applied: removed {removed or 'nothing'}; "
+                f"failed on {failed_label!r}; not attempted: {not_attempted or 'none'}. "
+                f"The issue's current labels are in this response. {failure.message}"
+            )
+            result.api_status_code = failure.status_code
+
+        return result
 
     async def _add_assignees(self, vi: GitHubIssueAddAssigneesInput) -> GitHubIssueToolOutput:
         full_name = self.client.check_repo(vi.owner, vi.repo)
@@ -487,13 +535,17 @@ class GitHubIssueTool(AbstractTool):
         if not vi.include_pull_requests:
             issues = [i for i in issues if not i.is_pull_request]
 
-        truncated = bool(raw.get('incomplete_results')) or len(issues) > max_results \
-            or (raw.get('total_count') or 0) > len(issues)
+        returned = issues[:max_results]
+        # total_count is GitHub's, counted before include_pull_requests filtering,
+        # so it can legitimately exceed returned_count.
+        truncated = bool(raw.get('incomplete_results')) \
+            or (raw.get('total_count') or 0) > len(returned)
 
         return GitHubIssueToolOutput(
             operation='search_issues',
             repository=full_name,
-            issues=issues[:max_results],
+            issues=returned,
+            returned_count=len(returned),
             total_count=raw.get('total_count'),
             truncated=truncated,
             rate_limit_remaining=rate_limit_remaining(response)
@@ -523,7 +575,7 @@ class GitHubIssueTool(AbstractTool):
         repo = getattr(validated_input, 'repo', None)
         return f"{owner}/{repo}" if owner and repo else None
 
-    def _truncate(self, text: Optional[str]) -> tuple:
+    def _truncate(self, text: Optional[str]) -> Tuple[Optional[str], bool]:
         """Trim long bodies -- raw GitHub bodies can be enormous."""
         if not text:
             return text, False

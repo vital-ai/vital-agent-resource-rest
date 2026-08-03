@@ -112,7 +112,7 @@ class SerperWebSearchTool(AbstractTool):
                         api_error=api_error,
                         api_status_code=api_status_code
                     )
-                    return self._create_success_response(tool_output.dict(), start_time)
+                    return self._create_success_response(tool_output.model_dump(), start_time)
 
             results = self._extract_search_results(raw_results, search_type)
             knowledge_graph = self._extract_knowledge_graph(raw_results)
@@ -177,7 +177,7 @@ class SerperWebSearchTool(AbstractTool):
                 api_status_code=api_status_code
             )
 
-            return self._create_success_response(tool_output.dict(), start_time)
+            return self._create_success_response(tool_output.model_dump(), start_time)
 
         except Exception as e:
             logger.error(f"Serper Web Search error: {str(e)}")

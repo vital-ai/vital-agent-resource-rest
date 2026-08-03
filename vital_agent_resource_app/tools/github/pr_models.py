@@ -251,7 +251,12 @@ class GitHubPRToolOutput(GitHubOutputBase):
     comments: List[GitHubPRComment] = Field(default_factory=list, description="Conversation comments")
     comment: Optional[GitHubPRComment] = Field(None, description="Newly created comment")
     merge_result: Optional[GitHubPRMergeResult] = Field(None, description="Outcome of a merge")
-    total_count: Optional[int] = Field(None, description="Number of records returned")
+    total_count: Optional[int] = Field(
+        None,
+        description="Corpus total reported by GitHub, set only where GitHub supplies one. "
+                    "GitHub gives no total for pull request list endpoints, so this is "
+                    "normally null -- use returned_count."
+    )
 
     model_config = {
         "json_schema_extra": {

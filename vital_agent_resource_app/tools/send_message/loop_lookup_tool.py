@@ -123,7 +123,7 @@ class LoopLookupTool(AbstractTool):
             request=request_obj
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _bulk_lookup(self, validated_input: LoopLookupBulkInput) -> dict:
         """Handle bulk contact lookup"""
@@ -163,7 +163,7 @@ class LoopLookupTool(AbstractTool):
             requests=requests_list
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _status_check(self, validated_input: LoopLookupStatusInput) -> dict:
         """Handle status check for a request"""
@@ -187,7 +187,7 @@ class LoopLookupTool(AbstractTool):
             result=result_obj
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _make_api_request(self, method: str, endpoint: str, data: dict = None) -> dict:
         """Make authenticated async API request to Loop Lookup service"""

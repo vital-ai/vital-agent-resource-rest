@@ -2,6 +2,7 @@ import logging
 import re
 from typing import Any, Callable, Optional, Set
 
+import httpx
 from githubkit import GitHub, TokenAuthStrategy
 from githubkit.exception import RequestFailed, GitHubException
 
@@ -13,6 +14,10 @@ _SCOPE_QUALIFIER_RE = re.compile(r'\b(repo|org|user):', re.IGNORECASE)
 _REPO_RE = re.compile(r'^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')
 
 DEFAULT_MAX_BODY_CHARS = 4000
+
+# githubkit defaults to no timeout at all; match the 60s httpx timeout used by
+# the other tools in this app.
+DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
 class GitHubToolError(Exception):
@@ -95,12 +100,18 @@ class GitHubClient:
                 f"allow_workflow_dispatch={self.allow_workflow_dispatch})"
             )
 
+        # githubkit passes timeout=None to httpx, which means wait forever --
+        # httpx's own default is 5s. Without this a hung connection would pin a
+        # request handler indefinitely. 60s matches the httpx timeout the other
+        # tools in this app use.
+        self.timeout = float(config.get('timeout') or DEFAULT_TIMEOUT_SECONDS)
+
         self.gh: Optional[GitHub] = None
         if self.available:
             kwargs = {}
             if self.base_url:
                 kwargs['base_url'] = self.base_url
-            self.gh = GitHub(TokenAuthStrategy(pat), **kwargs)
+            self.gh = GitHub(TokenAuthStrategy(pat), timeout=self.timeout, **kwargs)
 
     @staticmethod
     def _parse_allowed_repos(raw: Any) -> Set[str]:
@@ -215,6 +226,11 @@ class GitHubClient:
             response = await func(*args, **kwargs)
         except RequestFailed as e:
             raise self._map_request_failed(e, context)
+        except httpx.TimeoutException as e:
+            raise GitHubToolError(
+                f"GitHub request timed out after {self.timeout}s{self._suffix(context)}. "
+                f"The operation may or may not have been applied. ({e})"
+            )
         except GitHubException as e:
             raise GitHubToolError(f"GitHub request failed{self._suffix(context)}: {e}")
 
@@ -246,20 +262,34 @@ class GitHubClient:
         except Exception:
             detail = ''
 
+        headers = getattr(response, 'headers', {}) or {}
+        retry_after = headers.get('retry-after') if hasattr(headers, 'get') else None
+        remaining = rate_limit_remaining(response)
+        reset = headers.get('x-ratelimit-reset') if hasattr(headers, 'get') else None
+
+        # Rate limiting arrives in three shapes: 403 with remaining=0 (primary),
+        # 403 with retry-after and no remaining=0 (secondary), and 429. Only the
+        # first was handled before, so secondary limits were reported as a
+        # permissions problem and sent the caller chasing token scopes.
+        is_rate_limited = (
+            status == 429
+            or (status == 403 and remaining == 0)
+            or (status == 403 and retry_after is not None)
+        )
+
         if status == 401:
             message = (
                 f"GitHub rejected the token (401){suffix}. The PAT is invalid, expired, or "
                 f"revoked. {detail}"
             )
-        elif status == 403 and rate_limit_remaining(response) == 0:
-            reset = None
-            try:
-                reset = response.headers.get('x-ratelimit-reset')
-            except AttributeError:
-                pass
+        elif is_rate_limited:
+            kind = 'secondary' if retry_after is not None and remaining != 0 else 'primary'
+            when = (f"Retry after {retry_after}s." if retry_after is not None
+                    else f"Limit resets at epoch {reset}.")
             message = (
-                f"GitHub rate limit exceeded (403){suffix}. "
-                f"Limit resets at epoch {reset}. {detail}"
+                f"GitHub {kind} rate limit exceeded ({status}){suffix}. {when} "
+                f"This is throttling, not a permissions problem -- retry later rather than "
+                f"changing token scopes. {detail}"
             )
         elif status == 403:
             message = (

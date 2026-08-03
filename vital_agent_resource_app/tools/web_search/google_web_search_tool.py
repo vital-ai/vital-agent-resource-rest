@@ -150,7 +150,7 @@ class GoogleWebSearchTool(AbstractTool):
                 api_status_code=api_status_code
             )
             
-            return self._create_success_response(tool_output.dict(), start_time)
+            return self._create_success_response(tool_output.model_dump(), start_time)
             
         except Exception as e:
             logger.error(f"Google Web Search error: {str(e)}")

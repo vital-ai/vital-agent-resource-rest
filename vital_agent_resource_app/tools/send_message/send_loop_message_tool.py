@@ -163,7 +163,7 @@ class LoopMessageTool(AbstractTool):
             text=response_data.get("text", validated_input.text)
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _send_group_message(self, validated_input: LoopMessageGroupInput) -> dict:
         """Handle group message sending"""
@@ -212,7 +212,7 @@ class LoopMessageTool(AbstractTool):
             text=response_data.get("text", validated_input.text)
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _send_audio_message(self, validated_input: LoopMessageAudioInput) -> dict:
         """Handle audio message sending"""
@@ -251,7 +251,7 @@ class LoopMessageTool(AbstractTool):
             text=response_data.get("text", validated_input.text)
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _send_reaction(self, validated_input: LoopMessageReactionInput) -> dict:
         """Handle reaction sending"""
@@ -290,7 +290,7 @@ class LoopMessageTool(AbstractTool):
             text=response_data.get("text", validated_input.text)
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _check_status(self, validated_input: LoopMessageStatusInput) -> dict:
         """Handle status check for a message"""
@@ -319,7 +319,7 @@ class LoopMessageTool(AbstractTool):
             result=result_obj
         )
         
-        return output.dict()
+        return output.model_dump()
 
     async def _make_api_request(self, method: str, endpoint: str, data: dict = None) -> dict:
         """Make authenticated async API request to Loop Message service"""

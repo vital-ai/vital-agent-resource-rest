@@ -122,7 +122,7 @@ class SendEmailTool(AbstractTool):
                     result=email_result
                 )
                 
-                return self._create_success_response(tool_output.dict(), start_time)
+                return self._create_success_response(tool_output.model_dump(), start_time)
             else:
                 error_msg = f"Mailgun API error: {response.status_code}"
                 try:
@@ -142,7 +142,7 @@ class SendEmailTool(AbstractTool):
                     error=email_error
                 )
                 
-                return self._create_success_response(tool_output.dict(), start_time)
+                return self._create_success_response(tool_output.model_dump(), start_time)
                 
         except Exception as e:
             logger.error(f"Error sending email: {str(e)}")
@@ -157,7 +157,7 @@ class SendEmailTool(AbstractTool):
                 error=email_error
             )
             
-            return self._create_success_response(tool_output.dict(), start_time)
+            return self._create_success_response(tool_output.model_dump(), start_time)
     
     def _prepare_email_data(self, validated_input: EmailInput) -> Dict[str, Any]:
         """Prepare email data for Mailgun API"""

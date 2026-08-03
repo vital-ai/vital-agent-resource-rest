@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from vital_agent_resource_app.tools.abstract_tool import AbstractTool
 from vital_agent_resource_app.tools.tool_request import ToolRequest
@@ -110,7 +110,7 @@ class GitHubPRTool(AbstractTool):
         try:
             output = await handler(validated_input)
             self._log_output(output)
-            return self._create_success_response(output.dict(), start_time)
+            return self._create_success_response(output.model_dump(), start_time)
         except GitHubToolError as e:
             logger.warning(f"GitHub PR tool rejected {operation}: {e.message}")
             output = GitHubPRToolOutput(
@@ -119,7 +119,7 @@ class GitHubPRTool(AbstractTool):
                 api_error=e.message,
                 api_status_code=e.status_code
             )
-            return self._create_success_response(output.dict(), start_time)
+            return self._create_success_response(output.model_dump(), start_time)
         except Exception as e:
             logger.error(f"GitHub PR tool error during {operation}: {e}")
             return self._create_error_response(str(e), start_time)
@@ -152,14 +152,13 @@ class GitHubPRTool(AbstractTool):
 
         raw = response.json() or []
         prs = [self._map_pr(item) for item in raw]
-        truncated = len(prs) > max_results or has_next_page(response)
 
         return GitHubPRToolOutput(
             operation='list_prs',
             repository=full_name,
             pull_requests=prs[:max_results],
-            total_count=len(prs[:max_results]),
-            truncated=truncated,
+            returned_count=len(prs[:max_results]),
+            truncated=has_next_page(response),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -243,14 +242,13 @@ class GitHubPRTool(AbstractTool):
 
         raw = response.json() or []
         files = [self._map_file(item, vi.include_patch) for item in raw]
-        truncated = len(files) > max_results or has_next_page(response)
 
         return GitHubPRToolOutput(
             operation='list_pr_files',
             repository=full_name,
             files=files[:max_results],
-            total_count=len(files[:max_results]),
-            truncated=truncated,
+            returned_count=len(files[:max_results]),
+            truncated=has_next_page(response),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -271,14 +269,13 @@ class GitHubPRTool(AbstractTool):
 
         raw = response.json() or []
         comments = [self._map_comment(item) for item in raw]
-        truncated = len(comments) > max_results or has_next_page(response)
 
         return GitHubPRToolOutput(
             operation='list_pr_comments',
             repository=full_name,
             comments=comments[:max_results],
-            total_count=len(comments[:max_results]),
-            truncated=truncated,
+            returned_count=len(comments[:max_results]),
+            truncated=has_next_page(response),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -310,14 +307,13 @@ class GitHubPRTool(AbstractTool):
 
         raw = response.json() or []
         reviews = [self._map_review(item) for item in raw]
-        truncated = len(reviews) > max_results or has_next_page(response)
 
         return GitHubPRToolOutput(
             operation='list_pr_reviews',
             repository=full_name,
             reviews=reviews[:max_results],
-            total_count=len(reviews[:max_results]),
-            truncated=truncated,
+            returned_count=len(reviews[:max_results]),
+            truncated=has_next_page(response),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -390,7 +386,8 @@ class GitHubPRTool(AbstractTool):
         repo = getattr(validated_input, 'repo', None)
         return f"{owner}/{repo}" if owner and repo else None
 
-    def _truncate(self, text: Optional[str], limit: Optional[int] = None) -> tuple:
+    def _truncate(self, text: Optional[str],
+                  limit: Optional[int] = None) -> Tuple[Optional[str], bool]:
         if not text:
             return text, False
         limit = limit or self.client.max_body_chars

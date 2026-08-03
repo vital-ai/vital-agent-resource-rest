@@ -33,7 +33,7 @@ class ToolResponse(BaseModel):
         ]] = Field(None, description="Tool-specific output data")
 
     def to_dict(self):
-        d = self.dict()
+        d = self.model_dump()
         if d.get('tool_output') is None:
             d['tool_output'] = {"results": []}
         elif isinstance(d.get('tool_output'), dict) and 'results' not in d['tool_output']:

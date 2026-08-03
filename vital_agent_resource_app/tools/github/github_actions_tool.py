@@ -108,7 +108,7 @@ class GitHubActionsTool(AbstractTool):
         try:
             output = await handler(validated_input)
             self._log_output(output)
-            return self._create_success_response(output.dict(), start_time)
+            return self._create_success_response(output.model_dump(), start_time)
         except GitHubToolError as e:
             logger.warning(f"GitHub actions tool rejected {operation}: {e.message}")
             output = GitHubActionsToolOutput(
@@ -117,7 +117,7 @@ class GitHubActionsTool(AbstractTool):
                 api_error=e.message,
                 api_status_code=e.status_code
             )
-            return self._create_success_response(output.dict(), start_time)
+            return self._create_success_response(output.model_dump(), start_time)
         except Exception as e:
             logger.error(f"GitHub actions tool error during {operation}: {e}")
             return self._create_error_response(str(e), start_time)
@@ -146,8 +146,9 @@ class GitHubActionsTool(AbstractTool):
             operation='list_workflows',
             repository=full_name,
             workflows=workflows[:max_results],
+            returned_count=len(workflows[:max_results]),
             total_count=raw.get('total_count'),
-            truncated=len(workflows) > max_results,
+            truncated=(raw.get('total_count') or 0) > len(workflows[:max_results]),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -183,14 +184,15 @@ class GitHubActionsTool(AbstractTool):
 
         raw = response.json() or {}
         runs = [self._map_run(r) for r in raw.get('workflow_runs', [])]
-        truncated = len(runs) > max_results or has_next_page(response)
+        returned = runs[:max_results]
 
         return GitHubActionsToolOutput(
             operation='list_workflow_runs',
             repository=full_name,
-            runs=runs[:max_results],
+            runs=returned,
+            returned_count=len(returned),
             total_count=raw.get('total_count'),
-            truncated=truncated,
+            truncated=has_next_page(response) or (raw.get('total_count') or 0) > len(returned),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -228,8 +230,9 @@ class GitHubActionsTool(AbstractTool):
             operation='list_run_jobs',
             repository=full_name,
             jobs=jobs[:max_results],
+            returned_count=len(jobs[:max_results]),
             total_count=raw.get('total_count'),
-            truncated=len(jobs) > max_results,
+            truncated=(raw.get('total_count') or 0) > len(jobs[:max_results]),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -330,7 +333,7 @@ class GitHubActionsTool(AbstractTool):
             operation='get_run_logs',
             repository=full_name,
             logs=logs,
-            total_count=len(logs),
+            returned_count=len(logs),
             truncated=any(log.truncated for log in logs),
             rate_limit_remaining=rate_limit_remaining(response)
         )

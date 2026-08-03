@@ -278,7 +278,14 @@ class GitHubIssueToolOutput(GitHubOutputBase):
     comments: List[GitHubComment] = Field(default_factory=list, description="Comments from list operations")
     comment: Optional[GitHubComment] = Field(None, description="Comment from single-comment operations")
     deleted_id: Optional[int] = Field(None, description="Id of a deleted resource")
-    total_count: Optional[int] = Field(None, description="Total matches reported by GitHub for searches")
+    total_count: Optional[int] = Field(
+        None,
+        description="Corpus total reported by GitHub for the query, set only where GitHub "
+                    "supplies one (search). It counts records before this tool's own "
+                    "filtering, so with include_pull_requests=false it can exceed "
+                    "returned_count. For list operations GitHub gives no total and this "
+                    "is null -- use returned_count."
+    )
 
     model_config = {
         "json_schema_extra": {

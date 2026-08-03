@@ -93,7 +93,7 @@ class WeatherTool(AbstractTool):
                         weather_data=weather_data
                     )
                     
-                    return self._create_success_response(tool_output.dict(), start_time)
+                    return self._create_success_response(tool_output.model_dump(), start_time)
                 else:
                     logger.error(f"Weather API error: {response.status_code}")
                     return self._create_error_response(f"Weather API error: {response.status_code}", start_time)
@@ -166,7 +166,7 @@ class WeatherTool(AbstractTool):
                     weather_data=weather_data
                 )
                 
-                return self._create_success_response(tool_output.dict(), start_time)
+                return self._create_success_response(tool_output.model_dump(), start_time)
             else:
                 logger.error(f"Weather API error: {response.status_code}")
                 return self._create_error_response(f"Weather API error: {response.status_code}", start_time)

@@ -16,6 +16,11 @@ class GitHubRepoBase(BaseModel):
 class GitHubOutputBase(BaseModel):
     """Fields shared by every GitHub tool output."""
     repository: Optional[str] = Field(None, description="Repository the operation targeted, as 'owner/repo'")
+    returned_count: Optional[int] = Field(
+        None,
+        description="How many records this response actually contains. Always trust this "
+                    "over total_count when deciding what you received."
+    )
     truncated: bool = Field(False, description="True if more results existed than were returned")
     api_error: Optional[str] = Field(None, description="Error message if the GitHub API call failed")
     api_status_code: Optional[int] = Field(None, description="GitHub API status code if the call failed")

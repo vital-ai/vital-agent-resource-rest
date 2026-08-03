@@ -123,6 +123,11 @@ def test_read_operations():
     check('list_issues excludes pull requests by default',
           all(i.get('is_pull_request') is False for i in out.get('issues', [])))
     check('response carries rate limit info', out.get('rate_limit_remaining') is not None)
+    check('returned_count matches the issues actually returned',
+          out.get('returned_count') == len(out.get('issues', [])),
+          f"returned_count={out.get('returned_count')} len={len(out.get('issues', []))}")
+    check('list operations leave total_count null (GitHub gives no corpus total)',
+          out.get('total_count') is None, str(out.get('total_count')))
 
 
 def test_write_lifecycle():
@@ -178,6 +183,22 @@ def test_guards():
     out = tool_output(body)
     check('search rejects scope-widening qualifiers',
           'qualifier' in (out.get('api_error') or ''), str(out.get('api_error')))
+
+    # Search must actually return matches, not merely avoid an error -- a silent
+    # regression to zero hits (e.g. GitHub requiring advanced_search) would
+    # otherwise pass unnoticed.
+    status, body = call({'operation': 'search_issues', 'owner': OWNER, 'repo': REPO,
+                         'query': 'is:issue pipeline'})
+    out = tool_output(body)
+    check('search returns matches, not just an empty success',
+          len(out.get('issues', [])) > 0,
+          f"api_error={out.get('api_error')} issues={len(out.get('issues', []))}")
+    check('search returned_count matches the payload',
+          out.get('returned_count') == len(out.get('issues', [])),
+          f"returned_count={out.get('returned_count')}")
+    check('search total_count is GitHub\'s corpus total (>= returned_count)',
+          (out.get('total_count') or 0) >= (out.get('returned_count') or 0),
+          f"total={out.get('total_count')} returned={out.get('returned_count')}")
 
     status, body = call({'operation': 'delete_issue', 'owner': OWNER, 'repo': REPO,
                          'issue_number': 1}, expect_status=422)
@@ -246,6 +267,22 @@ def delete_test_branch(branch):
         return
     requests.delete(f"{GH_API}/repos/{OWNER}/{REPO}/git/refs/heads/{branch}",
                     headers=gh_headers(), timeout=30)
+
+
+def test_list_pagination():
+    """max_results is a target: PR filtering must not silently shrink the page."""
+    print("\n3b. List pagination")
+
+    status, body = call({'operation': 'list_issues', 'owner': OWNER, 'repo': REPO,
+                         'state': 'all', 'max_results': 3})
+    out = tool_output(body)
+    issues = out.get('issues', [])
+    check('list_issues fills max_results despite PR filtering',
+          len(issues) == 3, f"asked 3, got {len(issues)} (api_error={out.get('api_error')})")
+    check('no pull requests leak into the filtered result',
+          all(i.get('is_pull_request') is False for i in issues))
+    check('returned_count agrees with the payload',
+          out.get('returned_count') == len(issues), str(out.get('returned_count')))
 
 
 def test_pull_requests():
@@ -609,6 +646,7 @@ def main():
         test_read_operations()
         number = test_write_lifecycle()
         test_guards()
+        test_list_pagination()
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

@@ -47,7 +47,7 @@ class PlaceSearchTool(AbstractTool):
                 results=results
             )
             
-            return self._create_success_response(tool_output.dict(), start_time)
+            return self._create_success_response(tool_output.model_dump(), start_time)
             
         except Exception as e:
             return self._create_error_response(str(e), start_time)

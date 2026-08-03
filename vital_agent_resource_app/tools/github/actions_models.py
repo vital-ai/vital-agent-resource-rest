@@ -207,7 +207,12 @@ class GitHubActionsToolOutput(GitHubOutputBase):
         None,
         description="Explains that workflow_dispatch returns no run id, and how the run was located"
     )
-    total_count: Optional[int] = Field(None, description="Total records reported by GitHub")
+    total_count: Optional[int] = Field(
+        None,
+        description="Corpus total reported by GitHub for the query, which may exceed "
+                    "returned_count when results are paginated. Use returned_count for "
+                    "what this response contains."
+    )
 
     model_config = {
         "json_schema_extra": {
