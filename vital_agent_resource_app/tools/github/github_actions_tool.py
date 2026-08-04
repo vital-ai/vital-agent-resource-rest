@@ -235,6 +235,9 @@ class GitHubActionsTool(AbstractTool):
         jobs = [self._map_job(j) for j in raw.get('jobs', [])]
         # total_count is the corpus total, so more remain if this page did not
         # reach it -- or if GitHub advertised another page.
+        # max_results is the page stride here only because per_page is
+        # min(max_results, 100) and max_results is le=100, so the two are always
+        # equal. If per_page ever gains its own cap, this offset silently drifts.
         more = has_next_page(response) or \
             (raw.get('total_count') or 0) > (((vi.page or 1) - 1) * max_results
                                              + len(jobs[:max_results]))

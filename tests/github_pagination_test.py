@@ -34,8 +34,12 @@ from vital_agent_resource_app.tools.github.pr_models import (
 from vital_agent_resource_app.tools.github.github_actions_tool import GitHubActionsTool
 from vital_agent_resource_app.tools.github.actions_models import (
     GitHubActionsListWorkflowsInput, GitHubActionsListRunsInput,
-    GitHubActionsListJobsInput
+    GitHubActionsListJobsInput, GITHUB_ACTIONS_OPERATION_MODELS
 )
+from vital_agent_resource_app.tools.github.issue_models import (
+    GITHUB_ISSUE_OPERATION_MODELS
+)
+from vital_agent_resource_app.tools.github.pr_models import GITHUB_PR_OPERATION_MODELS
 
 PASSED = []
 FAILED = []
@@ -263,6 +267,34 @@ async def test_every_list_operation():
         'list_run_jobs': '_list_jobs',
     }
 
+    # Structural check first. It is derived from the operation registries rather
+    # than the table below, so an operation added later is covered whether or not
+    # anyone remembers to list it here -- the hand-maintained table is the same
+    # per-operation growth pattern that let two unpaginable operations survive.
+    # The heuristic is exact against the current code: an input model with
+    # max_results returns a collection, and a collection must be resumable.
+    registries = {
+        'issue': GITHUB_ISSUE_OPERATION_MODELS,
+        'pr': GITHUB_PR_OPERATION_MODELS,
+        'actions': GITHUB_ACTIONS_OPERATION_MODELS,
+    }
+    collection_ops = []
+    for tool_name, registry in registries.items():
+        for operation, model in registry.items():
+            if 'max_results' in model.model_fields:
+                collection_ops.append(f"{tool_name}.{operation}")
+                check(f'{tool_name}.{operation}: returns a collection, so accepts page',
+                      'page' in model.model_fields,
+                      f"{model.__name__} has no page field, so nothing can be resumed")
+
+    # It must also run before the behavioural loop: that loop reads vi.page, so a
+    # model missing the field dies there with an AttributeError instead of the
+    # diagnostic above.
+    check('every collection operation is exercised behaviourally too',
+          {c for c in collection_ops} == {label for label, _, _, _ in cases},
+          f"registry says {sorted(collection_ops)}, table covers "
+          f"{sorted(label for label, _, _, _ in cases)}")
+
     for label, tool_cls, vi, key in cases:
         # 6 records at max_results=2 means more always remain.
         client = EnvelopeClient(6, key)
@@ -276,12 +308,6 @@ async def test_every_list_operation():
         check(f'{label}: truncated implies next_page',
               out.next_page is not None,
               'truncated=True with next_page=None -- the rest is unreachable')
-
-    # And every one of them must accept a page input at all.
-    for label, _, vi, _ in cases:
-        check(f'{label}: accepts a page input',
-              'page' in type(vi).model_fields,
-              f"{type(vi).__name__} has no page field, so nothing can be resumed")
 
 
 async def main():
