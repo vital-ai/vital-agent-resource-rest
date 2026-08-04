@@ -73,16 +73,50 @@ class GitHubMergeInput(GitHubRepoBase):
         None, description="Head SHA the merge must match; guards against merging newer commits"
     )
 
+class GitHubDeleteBranchInput(GitHubRepoBase):
+    """Delete a branch.
+
+    The counterpart to create_branch. Without it every branch an agent creates
+    is permanent, which makes automated fixtures accumulate refs forever.
+
+    Refuses the default branch outright -- not gated, refused: there is no
+    legitimate reason for an agent to delete it, and no config flag should make
+    it possible.
+    """
+    operation: Literal["delete_branch"] = Field(..., description="Operation to perform")
+    branch: str = Field(..., description="Branch to delete", min_length=1)
+
+
+class GitHubDeleteFileInput(GitHubRepoBase):
+    """Delete a file, committing the removal.
+
+    The counterpart to create_or_update_file, and gated the same way. Without it
+    an agent can add and modify but never remove -- including its own mistakes.
+    """
+    operation: Literal["delete_file"] = Field(..., description="Operation to perform")
+    path: str = Field(..., description="Path within the repository", min_length=1)
+    message: str = Field(..., description="Commit message", min_length=1)
+    branch: str = Field(..., description="Branch to commit on", min_length=1)
+    sha: Optional[str] = Field(
+        None,
+        description="Blob SHA of the file being deleted. Required by GitHub; the tool "
+                    "looks it up if omitted.")
+
+
 GitHubCodeToolInput = Union[
     GitHubCreateBranchInput,
     GitHubWriteFileInput,
     GitHubMergeInput,
+    GitHubDeleteBranchInput,
+    GitHubDeleteFileInput,
 ]
 
 GITHUB_CODE_OPERATION_MODELS = {
     "create_branch": GitHubCreateBranchInput,
     "create_or_update_file": GitHubWriteFileInput,
     "merge_pr": GitHubMergeInput,
+    "delete_branch": GitHubDeleteBranchInput,
+    "delete_file": GitHubDeleteFileInput,
 }
 
 
@@ -103,6 +137,13 @@ class GitHubMergeResult(BaseModel):
     sha: Optional[str] = Field(None, description="SHA of the merge commit")
     message: Optional[str] = Field(None, description="Message returned by GitHub")
 
+class GitHubDeleteResult(BaseModel):
+    target: str = Field(..., description="What was deleted -- a branch name or a file path")
+    kind: str = Field(..., description="branch or file")
+    branch: Optional[str] = Field(None, description="Branch the deletion was committed on")
+    commit_sha: Optional[str] = Field(None, description="Commit recording a file deletion")
+
+
 class GitHubCodeToolOutput(GitHubOutputBase):
     """Output model for the GitHub code tool"""
     tool: Literal["github_code_tool"] = Field("github_code_tool", description="Tool identifier")
@@ -112,6 +153,8 @@ class GitHubCodeToolOutput(GitHubOutputBase):
         None, description="Outcome of a content write")
     merge_result: Optional[GitHubMergeResult] = Field(
         None, description="Outcome of a merge")
+    delete_result: Optional[GitHubDeleteResult] = Field(
+        None, description="Outcome of a branch or file deletion")
 
     model_config = {
         "json_schema_extra": {

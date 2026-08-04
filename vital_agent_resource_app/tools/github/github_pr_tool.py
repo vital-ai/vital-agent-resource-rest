@@ -11,7 +11,7 @@ from vital_agent_resource_app.tools.github.github_client import (
 from vital_agent_resource_app.tools.github.pr_models import (
     GitHubPRListInput, GitHubPRGetInput, GitHubPRCreateInput, GitHubPRUpdateInput,
     GitHubPRFilesInput, GitHubPRCommentListInput, GitHubPRCommentCreateInput,
-    GitHubPRReviewListInput, GitHubPRReviewCreateInput,
+    GitHubPRReviewListInput, GitHubPRReviewCreateInput, GitHubPRRequestReviewersInput,
     GitHubPullRequest, GitHubPRFile, GitHubPRReview, GitHubPRComment,
     GitHubPRToolOutput
 )
@@ -47,6 +47,7 @@ class GitHubPRTool(AbstractTool):
             GitHubPRCommentCreateInput: self._add_pr_comment,
             GitHubPRReviewListInput: self._list_pr_reviews,
             GitHubPRReviewCreateInput: self._create_pr_review,
+            GitHubPRRequestReviewersInput: self._request_reviewers,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -354,6 +355,51 @@ class GitHubPRTool(AbstractTool):
             operation='create_pr_review',
             repository=full_name,
             review=self._map_review(response.json()),
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    async def _request_reviewers(self, vi: GitHubPRRequestReviewersInput) -> GitHubPRToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        self.client.check_write_allowed('request_reviewers')
+
+        if not vi.reviewers and not vi.team_reviewers:
+            raise GitHubToolError(
+                "request_reviewers needs at least one of `reviewers` or `team_reviewers`."
+            )
+
+        data: Dict[str, Any] = {}
+        if vi.reviewers:
+            data['reviewers'] = vi.reviewers
+        if vi.team_reviewers:
+            data['team_reviewers'] = vi.team_reviewers
+
+        response = await self.client.call(
+            self.client.gh.rest.pulls.async_request_reviewers,
+            vi.owner, vi.repo, vi.pr_number, data=data,
+            context=f"request_reviewers {full_name}#{vi.pr_number}"
+        )
+
+        pr = self._map_pr(response.json())
+
+        # GitHub drops logins it will not accept as reviewers, the same silent
+        # positive failure add_assignees had. Say so rather than reporting success.
+        requested = {r.lower() for r in (pr.requested_reviewers if pr else [])}
+        rejected = [r for r in (vi.reviewers or []) if r.lower() not in requested]
+        api_error = None
+        if rejected:
+            api_error = (
+                f"GitHub did not add {rejected} as reviewers on {full_name} -- those "
+                f"logins cannot review this pull request (no such user, no access, or "
+                f"they are the PR author). Requested: "
+                f"{sorted(requested) or 'nobody'}."
+            )
+            logger.warning(f"request_reviewers {full_name}#{vi.pr_number}: {api_error}")
+
+        return GitHubPRToolOutput(
+            operation='request_reviewers',
+            repository=full_name,
+            pull_request=pr,
+            api_error=api_error,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 

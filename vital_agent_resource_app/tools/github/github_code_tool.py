@@ -12,7 +12,8 @@ from vital_agent_resource_app.tools.github.github_client import (
 from vital_agent_resource_app.tools.github.repo_models import GitHubBranch
 from vital_agent_resource_app.tools.github.code_models import (
     GitHubCreateBranchInput, GitHubWriteFileInput, GitHubMergeInput,
-    GitHubWriteResult, GitHubMergeResult, GitHubCodeToolOutput
+    GitHubDeleteBranchInput, GitHubDeleteFileInput,
+    GitHubWriteResult, GitHubMergeResult, GitHubDeleteResult, GitHubCodeToolOutput
 )
 
 logger = logging.getLogger("VitalAgentContainerLogger")
@@ -30,6 +31,8 @@ class GitHubCodeTool(AbstractTool):
 
     The config gates still apply underneath as defence in depth:
       create_branch          allow_writes
+      delete_branch          allow_writes  (never the default branch)
+      delete_file            allow_content_writes        (default off)
       create_or_update_file  allow_content_writes        (default off)
       merge_pr               allow_pr_merge              (default off)
     and committing to the default branch additionally needs
@@ -43,6 +46,8 @@ class GitHubCodeTool(AbstractTool):
             GitHubCreateBranchInput: self._create_branch,
             GitHubWriteFileInput: self._write_file,
             GitHubMergeInput: self._merge_pr,
+            GitHubDeleteBranchInput: self._delete_branch,
+            GitHubDeleteFileInput: self._delete_file,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -176,11 +181,36 @@ class GitHubCodeTool(AbstractTool):
         if sha:
             data['sha'] = sha
 
-        response = await self.client.call(
-            self.client.gh.rest.repos.async_create_or_update_file_contents,
-            vi.owner, vi.repo, vi.path, data=data,
-            context=f"create_or_update_file {full_name}:{vi.path} on {vi.branch}"
-        )
+        try:
+            response = await self.client.call(
+                self.client.gh.rest.repos.async_create_or_update_file_contents,
+                vi.owner, vi.repo, vi.path, data=data,
+                context=f"create_or_update_file {full_name}:{vi.path} on {vi.branch}"
+            )
+        except GitHubToolError as e:
+            # GitHub's contents API is eventually consistent: a file committed
+            # moments earlier can still read as 404, so the sha lookup above
+            # returns None and the write is rejected for a missing sha even
+            # though the file exists. Observed intermittently in the pipeline.
+            # Re-read once and retry -- by now the write has usually landed.
+            retryable = (e.status_code == 422 and sha is None
+                         and 'sha' in (e.message or '').lower())
+            if not retryable:
+                raise
+            logger.info(
+                f"create_or_update_file {full_name}:{vi.path} rejected for a missing sha; "
+                f"re-reading and retrying once (read-after-write lag)"
+            )
+            sha = await self._existing_blob_sha(
+                full_name, vi.owner, vi.repo, vi.path, vi.branch)
+            if not sha:
+                raise
+            data['sha'] = sha
+            response = await self.client.call(
+                self.client.gh.rest.repos.async_create_or_update_file_contents,
+                vi.owner, vi.repo, vi.path, data=data,
+                context=f"create_or_update_file retry {full_name}:{vi.path} on {vi.branch}"
+            )
 
         raw = response.json() or {}
         commit = raw.get('commit') or {}
@@ -194,6 +224,8 @@ class GitHubCodeTool(AbstractTool):
                 branch=vi.branch,
                 commit_sha=commit.get('sha'),
                 blob_sha=content.get('sha'),
+                # `sha` may have been filled in by the retry above, in which case
+                # the file already existed and this was an update.
                 created=sha is None,
                 html_url=commit.get('html_url'),
             ),
@@ -227,6 +259,62 @@ class GitHubCodeTool(AbstractTool):
                 sha=raw.get('sha'),
                 message=raw.get('message')
             ),
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    async def _delete_branch(self, vi: GitHubDeleteBranchInput) -> GitHubCodeToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        self.client.check_write_allowed('delete_branch')
+
+        # Refused rather than gated: no configuration should let an agent delete
+        # the branch everything else is built on.
+        default_branch = await self._default_branch(full_name, vi.owner, vi.repo)
+        if vi.branch == default_branch:
+            raise GitHubToolError(
+                f"Refusing to delete '{vi.branch}': it is the default branch of "
+                f"{full_name}. This is refused outright, not gated by configuration."
+            )
+
+        response = await self.client.call(
+            self.client.gh.rest.git.async_delete_ref,
+            vi.owner, vi.repo, f"heads/{vi.branch}",
+            context=f"delete_branch {full_name}:{vi.branch}"
+        )
+        return GitHubCodeToolOutput(
+            operation='delete_branch',
+            repository=full_name,
+            delete_result=GitHubDeleteResult(target=vi.branch, kind='branch'),
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    async def _delete_file(self, vi: GitHubDeleteFileInput) -> GitHubCodeToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        self.client.check_write_allowed('delete_file', gate='allow_content_writes')
+
+        default_branch = await self._default_branch(full_name, vi.owner, vi.repo)
+        self.client.check_default_branch_write(vi.branch, default_branch, full_name)
+
+        sha = vi.sha
+        if sha is None:
+            sha = await self._existing_blob_sha(full_name, vi.owner, vi.repo, vi.path, vi.branch)
+        if not sha:
+            raise GitHubToolError(
+                f"Cannot delete '{vi.path}' on {full_name}@{vi.branch}: it does not exist."
+            )
+
+        response = await self.client.call(
+            self.client.gh.rest.repos.async_delete_file,
+            vi.owner, vi.repo, vi.path,
+            data={'message': vi.message, 'sha': sha, 'branch': vi.branch},
+            context=f"delete_file {full_name}:{vi.path} on {vi.branch}"
+        )
+        commit = (response.json() or {}).get('commit') or {}
+        return GitHubCodeToolOutput(
+            operation='delete_file',
+            repository=full_name,
+            delete_result=GitHubDeleteResult(
+                target=vi.path, kind='file', branch=vi.branch,
+                commit_sha=commit.get('sha')),
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -289,5 +377,9 @@ class GitHubCodeTool(AbstractTool):
         if output.merge_result:
             logger.info(f"Merge: merged={output.merge_result.merged} "
                         f"sha={output.merge_result.sha}")
+        if output.delete_result:
+            d = output.delete_result
+            logger.info(f"Deleted {d.kind} {d.target}"
+                        + (f" on {d.branch} -> commit {d.commit_sha}" if d.branch else ""))
         logger.info(f"Rate limit remaining: {output.rate_limit_remaining}")
         logger.info("=" * 80)

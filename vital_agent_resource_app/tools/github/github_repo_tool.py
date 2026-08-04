@@ -13,7 +13,7 @@ from vital_agent_resource_app.tools.github.github_client import (
 )
 from vital_agent_resource_app.tools.github.repo_models import (
     GitHubRepoGetInput, GitHubGetFileInput, GitHubListBranchesInput,
-    GitHubListCommitsInput, GitHubCompareRefsInput,
+    GitHubListCommitsInput, GitHubCompareRefsInput, GitHubGetCommitInput,
     GitHubRepository, GitHubFileContent, GitHubBranch, GitHubCommit,
     GitHubComparison, GitHubRepoToolOutput
 )
@@ -42,6 +42,7 @@ class GitHubRepoTool(AbstractTool):
             GitHubListBranchesInput: self._list_branches,
             GitHubListCommitsInput: self._list_commits,
             GitHubCompareRefsInput: self._compare_refs,
+            GitHubGetCommitInput: self._get_commit,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -296,6 +297,41 @@ class GitHubRepoTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
+    async def _get_commit(self, vi: GitHubGetCommitInput) -> GitHubRepoToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        max_files = vi.max_files or 50
+
+        response = await self.client.call(
+            self.client.gh.rest.repos.async_get_commit,
+            vi.owner, vi.repo, vi.ref, per_page=min(max_files, 100),
+            context=f"get_commit {full_name}@{vi.ref}"
+        )
+
+        raw = response.json() or {}
+        files = []
+        for f in (raw.get('files') or [])[:max_files]:
+            entry = {
+                'filename': f.get('filename'),
+                'status': f.get('status'),
+                'additions': f.get('additions'),
+                'deletions': f.get('deletions'),
+            }
+            if vi.include_patch and f.get('patch'):
+                patch = f['patch']
+                entry['patch'] = patch[:MAX_PATCH_CHARS]
+                entry['patch_truncated'] = len(patch) > MAX_PATCH_CHARS
+            files.append(entry)
+
+        return GitHubRepoToolOutput(
+            operation='get_commit',
+            repository=full_name,
+            commit=self._map_commit(raw),
+            files=files,
+            returned_count=len(files),
+            truncated=len(raw.get('files') or []) > max_files,
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -385,6 +421,8 @@ class GitHubRepoTool(AbstractTool):
             logger.info(f"Branches: {[b.name for b in output.branches]}")
         if output.commits:
             logger.info(f"Commits: {len(output.commits)}")
+        if output.commit:
+            logger.info(f"Commit {output.commit.sha[:7]}: {(output.commit.message or '')[:60]}")
         if output.comparison:
             c = output.comparison
             logger.info(f"Comparison: {c.status} ahead={c.ahead_by} behind={c.behind_by} "

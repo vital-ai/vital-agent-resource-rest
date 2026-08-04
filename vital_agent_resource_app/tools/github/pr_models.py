@@ -131,6 +131,23 @@ class GitHubPRReviewCreateInput(GitHubRepoBase):
     body: Optional[str] = Field(None, description="Review body; required for REQUEST_CHANGES and COMMENT")
 
 
+class GitHubPRRequestReviewersInput(GitHubRepoBase):
+    """Ask people to review a pull request.
+
+    This is the last mile of the propose-a-change workflow. Content writes are
+    kept off the default branch on the grounds that "a human reviews before
+    anything lands on main" -- without this operation there is no way for an
+    agent to summon that human, and the safety argument rests on a step the
+    tools cannot perform.
+    """
+    operation: Literal["request_reviewers"] = Field(..., description="Operation to perform")
+    pr_number: int = Field(..., description="Pull request number", ge=1)
+    reviewers: Optional[List[str]] = Field(
+        None, description="User logins to request review from")
+    team_reviewers: Optional[List[str]] = Field(
+        None, description="Team slugs to request review from")
+
+
 GitHubPRToolInput = Union[
     GitHubPRListInput,
     GitHubPRGetInput,
@@ -141,6 +158,7 @@ GitHubPRToolInput = Union[
     GitHubPRCommentCreateInput,
     GitHubPRReviewListInput,
     GitHubPRReviewCreateInput,
+    GitHubPRRequestReviewersInput,
 ]
 
 GITHUB_PR_OPERATION_MODELS = {
@@ -153,6 +171,7 @@ GITHUB_PR_OPERATION_MODELS = {
     "add_pr_comment": GitHubPRCommentCreateInput,
     "list_pr_reviews": GitHubPRReviewListInput,
     "create_pr_review": GitHubPRReviewCreateInput,
+    "request_reviewers": GitHubPRRequestReviewersInput,
 }
 
 

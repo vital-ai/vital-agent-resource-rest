@@ -485,7 +485,7 @@ def test_silent_failures_are_now_loud(users):
     print(f"     closed issue #{number}")
 
 
-def test_contents_and_refs():
+def test_contents_and_refs(users):
     """Phase B: reads, branch creation, content writes, and both new gates.
 
     Also the end-to-end flow the tools could not previously do at all --
@@ -592,6 +592,55 @@ def test_contents_and_refs():
               'pr_number': pr_number, 'state': 'closed'}, tool='github_pr_tool')
         print(f"     closed PR #{pr_number}")
 
+    # get_commit: a single commit's own diff, which list_commits/compare_refs do not give.
+    status, body = call({'operation': 'list_commits', 'owner': OWNER, 'repo': REPO,
+                         'ref': branch, 'max_results': 1}, tool='github_repo_tool')
+    head_sha = ((tool_output(body).get('commits') or [{}])[0]).get('sha')
+    status, body = call({'operation': 'get_commit', 'owner': OWNER, 'repo': REPO,
+                         'ref': head_sha}, tool='github_repo_tool')
+    out = tool_output(body)
+    check('get_commit returns one commit with its files',
+          (out.get('commit') or {}).get('sha') == head_sha and len(out.get('files', [])) >= 1,
+          str(out.get('api_error')))
+
+    # request_reviewers: the step the default-branch refusal assumes exists.
+    if users:
+        status, body = call({'operation': 'request_reviewers', 'owner': OWNER, 'repo': REPO,
+                             'pr_number': pr_number, 'reviewers': [users[0]]},
+                            tool='github_pr_tool')
+        out = tool_output(body)
+        # The only assignable user here is the PAT owner, who authored the PR,
+        # and GitHub refuses "review cannot be requested from pull request
+        # author" with a 422. Requesting successfully and being told why not are
+        # both acceptable; silently reporting success with nobody requested is
+        # not -- that is the failure mode add_assignees had.
+        requested = (out.get('pull_request') or {}).get('requested_reviewers') or []
+        check('request_reviewers never reports a silent success',
+              bool(requested) or bool(out.get('api_error')),
+              f"requested={requested} api_error={out.get('api_error')}")
+
+    status, body = call({'operation': 'request_reviewers', 'owner': OWNER, 'repo': REPO,
+                         'pr_number': pr_number}, tool='github_pr_tool')
+    out = tool_output(body)
+    check('request_reviewers with no reviewers is rejected',
+          'at least one' in (out.get('api_error') or ''), str(out.get('api_error')))
+
+    # delete_file: the counterpart create_or_update_file shipped without.
+    status, body = call({'operation': 'delete_file', 'owner': OWNER, 'repo': REPO,
+                         'path': path, 'message': 'pipeline: remove the file',
+                         'branch': branch}, tool='github_code_tool')
+    out = tool_output(body)
+    d = out.get('delete_result') or {}
+    check('delete_file removes a file it created',
+          d.get('kind') == 'file' and bool(d.get('commit_sha')),
+          f"api_error={out.get('api_error')} delete_result={d}")
+
+    status, body = call({'operation': 'get_file_contents', 'owner': OWNER, 'repo': REPO,
+                         'path': path, 'ref': branch}, tool='github_repo_tool')
+    out = tool_output(body)
+    check('the deleted file is gone', out.get('api_status_code') == 404,
+          str(out.get('api_error'))[:120])
+
     # The split is the control: the read-only tool must not accept a write.
     status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
                          'path': 'x.md', 'content': 'x', 'message': 'x', 'branch': branch},
@@ -604,8 +653,30 @@ def test_contents_and_refs():
     check('github_code_tool refuses a read operation', status == 422,
           f"status={status} -- the code tool accepted a read operation")
 
-    delete_test_branch(branch)
-    print(f"     deleted branch {branch}")
+    # delete_branch: teardown through the tools, so a fixture no longer needs a
+    # raw PAT and branches stop accumulating.
+    status, body = call({'operation': 'delete_branch', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch}, tool='github_code_tool')
+    out = tool_output(body)
+    check('delete_branch removes the branch',
+          (out.get('delete_result') or {}).get('kind') == 'branch',
+          str(out.get('api_error')))
+
+    status, body = call({'operation': 'list_branches', 'owner': OWNER, 'repo': REPO,
+                         'max_results': 100}, tool='github_repo_tool')
+    names = [b['name'] for b in tool_output(body).get('branches', [])]
+    check('the deleted branch is gone from the repository', branch not in names, str(names))
+
+    # And the default branch must be refused outright, not merely gated.
+    status, body = call({'operation': 'delete_branch', 'owner': OWNER, 'repo': REPO,
+                         'branch': default_branch}, tool='github_code_tool')
+    out = tool_output(body)
+    check('deleting the default branch is refused outright',
+          'default branch' in (out.get('api_error') or '')
+          and 'not gated' in (out.get('api_error') or ''),
+          str(out.get('api_error'))[:160])
+    check('the default branch still exists',
+          default_branch in names, str(names))
 
 
 def test_pull_requests():
@@ -974,7 +1045,7 @@ def main():
         test_pagination_no_gaps()
         users = test_enumeration_and_metadata()
         test_silent_failures_are_now_loud(users)
-        test_contents_and_refs()
+        test_contents_and_refs(users)
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

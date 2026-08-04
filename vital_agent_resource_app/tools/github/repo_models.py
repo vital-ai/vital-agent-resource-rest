@@ -76,12 +76,26 @@ class GitHubCompareRefsInput(GitHubRepoBase):
     max_files: Optional[int] = Field(50, description="Maximum changed files to return", ge=1, le=100)
 
 
+class GitHubGetCommitInput(GitHubRepoBase):
+    """Get one commit, with the files it changed.
+
+    list_commits gives commit metadata and compare_refs gives a range; neither
+    gives a single commit's own diff.
+    """
+    operation: Literal["get_commit"] = Field(..., description="Operation to perform")
+    ref: str = Field(..., description="Commit SHA, branch or tag", min_length=1)
+    include_patch: Optional[bool] = Field(
+        False, description="Include diff hunks per file. Off by default -- patches are large.")
+    max_files: Optional[int] = Field(50, description="Maximum changed files to return", ge=1, le=100)
+
+
 GitHubRepoToolInput = Union[
     GitHubRepoGetInput,
     GitHubGetFileInput,
     GitHubListBranchesInput,
     GitHubListCommitsInput,
     GitHubCompareRefsInput,
+    GitHubGetCommitInput,
 ]
 
 GITHUB_REPO_OPERATION_MODELS = {
@@ -90,6 +104,7 @@ GITHUB_REPO_OPERATION_MODELS = {
     "list_branches": GitHubListBranchesInput,
     "list_commits": GitHubListCommitsInput,
     "compare_refs": GitHubCompareRefsInput,
+    "get_commit": GitHubGetCommitInput,
 }
 
 
@@ -167,6 +182,7 @@ class GitHubRepoToolOutput(GitHubOutputBase):
     branches: List[GitHubBranch] = Field(default_factory=list, description="Branches")
     commits: List[GitHubCommit] = Field(default_factory=list, description="Commits")
     comparison: Optional[GitHubComparison] = Field(None, description="Ref comparison summary")
+    commit: Optional[GitHubCommit] = Field(None, description="Single commit, from get_commit")
     files: List[dict] = Field(
         default_factory=list, description="Changed files from compare_refs")
 
