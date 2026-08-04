@@ -333,13 +333,17 @@ def test_pagination_no_gaps():
         return
 
     # Small pages force multi-page accumulation, which is where the slice can
-    # discard records the next request would otherwise skip past.
+    # discard records the next request would otherwise skip past. Derive the step
+    # budget from the data: this repository accumulates test issues, and a fixed
+    # cap silently turns "ran out of steps" into "missed issues".
+    per_call = 2
+    budget = (len(expected) // per_call) + 10
     seen = set()
     page = None
     visited = []
-    for _ in range(40):
+    for _ in range(budget):
         payload = {'operation': 'list_issues', 'owner': OWNER, 'repo': REPO,
-                   'state': 'all', 'max_results': 2}
+                   'state': 'all', 'max_results': per_call}
         if page is not None:
             payload['page'] = page
         status, body = call(payload)
@@ -369,7 +373,8 @@ def test_pagination_no_gaps():
 
     missing = expected - seen
     check('walking next_page reaches every issue (no gaps)',
-          not missing, f"missed issues {sorted(missing)}")
+          not missing,
+          f"missed issues {sorted(missing)} after {len(visited)} of {budget} allowed calls")
     check('the walk visited multiple pages', len(visited) > 1, str(visited))
 
 
@@ -525,7 +530,7 @@ def test_contents_and_refs():
     status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
                          'path': 'should-never-exist.md', 'content': 'nope',
                          'message': 'should be refused', 'branch': default_branch},
-                        tool='github_repo_tool')
+                        tool='github_code_tool')
     out = tool_output(body)
     error = out.get('api_error') or ''
     check('committing to the default branch is refused',
@@ -534,7 +539,7 @@ def test_contents_and_refs():
     # --- create_branch -> write -> PR, entirely through the tools ---
     branch = f"tool-flow-{int(time.time())}"
     status, body = call({'operation': 'create_branch', 'owner': OWNER, 'repo': REPO,
-                         'branch': branch}, tool='github_repo_tool')
+                         'branch': branch}, tool='github_code_tool')
     out = tool_output(body)
     check('create_branch succeeds', (out.get('branch') or {}).get('name') == branch,
           str(out.get('api_error')))
@@ -543,7 +548,7 @@ def test_contents_and_refs():
     status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
                          'path': path, 'content': 'created by the pipeline test\n',
                          'message': 'pipeline: add a file', 'branch': branch},
-                        tool='github_repo_tool')
+                        tool='github_code_tool')
     out = tool_output(body)
     w = out.get('write_result') or {}
     check('create_or_update_file creates a file', w.get('created') is True,
@@ -554,7 +559,7 @@ def test_contents_and_refs():
     status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
                          'path': path, 'content': 'updated by the pipeline test\n',
                          'message': 'pipeline: update the file', 'branch': branch},
-                        tool='github_repo_tool')
+                        tool='github_code_tool')
     out = tool_output(body)
     w = out.get('write_result') or {}
     check('updating an existing file resolves its sha automatically',
@@ -586,6 +591,18 @@ def test_contents_and_refs():
         call({'operation': 'update_pr', 'owner': OWNER, 'repo': REPO,
               'pr_number': pr_number, 'state': 'closed'}, tool='github_pr_tool')
         print(f"     closed PR #{pr_number}")
+
+    # The split is the control: the read-only tool must not accept a write.
+    status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
+                         'path': 'x.md', 'content': 'x', 'message': 'x', 'branch': branch},
+                        expect_status=422, tool='github_repo_tool')
+    check('github_repo_tool refuses a code write outright', status == 422,
+          f"status={status} -- the read-only tool accepted a write operation")
+
+    status, body = call({'operation': 'get_repo', 'owner': OWNER, 'repo': REPO},
+                        expect_status=422, tool='github_code_tool')
+    check('github_code_tool refuses a read operation', status == 422,
+          f"status={status} -- the code tool accepted a read operation")
 
     delete_test_branch(branch)
     print(f"     deleted branch {branch}")
@@ -686,8 +703,9 @@ def test_pull_requests():
     check('create_pr_review(APPROVE) is gated with merges',
           'ALLOW_PR_MERGE' in (out.get('api_error') or ''), str(out.get('api_error')))
 
+    # merge_pr moved to github_code_tool -- merging lands commits.
     status, body = call({'operation': 'merge_pr', 'owner': OWNER, 'repo': REPO,
-                         'pr_number': number}, tool='github_pr_tool')
+                         'pr_number': number}, tool='github_code_tool')
     out = tool_output(body)
     check('merge_pr is blocked by allow_pr_merge=false',
           'ALLOW_PR_MERGE' in (out.get('api_error') or ''), str(out.get('api_error')))

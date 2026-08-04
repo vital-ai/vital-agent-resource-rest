@@ -8,6 +8,7 @@ from enum import Enum
 class ToolName(str, Enum):
     """Available tool names"""
     github_actions_tool = "github_actions_tool"
+    github_code_tool = "github_code_tool"
     github_issue_tool = "github_issue_tool"
     github_pr_tool = "github_pr_tool"
     github_repo_tool = "github_repo_tool"

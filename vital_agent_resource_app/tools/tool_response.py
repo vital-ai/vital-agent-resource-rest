@@ -12,6 +12,7 @@ from vital_agent_resource_app.tools.github.issue_models import GitHubIssueToolOu
 from vital_agent_resource_app.tools.github.pr_models import GitHubPRToolOutput
 from vital_agent_resource_app.tools.github.actions_models import GitHubActionsToolOutput
 from vital_agent_resource_app.tools.github.repo_models import GitHubRepoToolOutput
+from vital_agent_resource_app.tools.github.code_models import GitHubCodeToolOutput
 from vital_agent_resource_app.tools.send_email.models import EmailOutput
 
 
@@ -30,6 +31,7 @@ class ToolResponse(BaseModel):
         GitHubPRToolOutput,
         GitHubActionsToolOutput,
         GitHubRepoToolOutput,
+        GitHubCodeToolOutput,
         EmailOutput,
         dict
         ]] = Field(None, description="Tool-specific output data")

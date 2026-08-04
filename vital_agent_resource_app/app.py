@@ -77,6 +77,9 @@ from vital_agent_resource_app.tools.github.actions_models import (
 from vital_agent_resource_app.tools.github.repo_models import (
     GitHubRepoToolInput, GitHubRepoToolOutput
 )
+from vital_agent_resource_app.tools.github.code_models import (
+    GitHubCodeToolInput, GitHubCodeToolOutput
+)
 from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
 from vital_agent_resource_app.tools.web_search.google_web_search_tool import GoogleWebSearchTool
 from vital_agent_resource_app.tools.serper_web_search.serper_web_search_tool import SerperWebSearchTool
@@ -88,6 +91,7 @@ from vital_agent_resource_app.tools.github.github_issue_tool import GitHubIssueT
 from vital_agent_resource_app.tools.github.github_pr_tool import GitHubPRTool
 from vital_agent_resource_app.tools.github.github_actions_tool import GitHubActionsTool
 from vital_agent_resource_app.tools.github.github_repo_tool import GitHubRepoTool
+from vital_agent_resource_app.tools.github.github_code_tool import GitHubCodeTool
 
 # Import model modules to register tools
 from vital_agent_resource_app.tools.google_address_validation import models as address_models
@@ -210,6 +214,16 @@ tool_registry.add_tool(
     input_model=GitHubRepoToolInput,
     output_model=GitHubRepoToolOutput,
     tool_instance=GitHubRepoTool(github_config, github_client)
+)
+
+# Separate from github_repo_tool by authority, not resource: every operation in
+# this tool changes code, so whether an agent may change code is decided by
+# whether this tool is registered for it.
+tool_registry.add_tool(
+    tool_name=ToolName.github_code_tool.value,
+    input_model=GitHubCodeToolInput,
+    output_model=GitHubCodeToolOutput,
+    tool_instance=GitHubCodeTool(github_config, github_client)
 )
 
 tool_registry.add_tool(

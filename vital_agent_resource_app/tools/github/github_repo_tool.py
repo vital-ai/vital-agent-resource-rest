@@ -13,10 +13,9 @@ from vital_agent_resource_app.tools.github.github_client import (
 )
 from vital_agent_resource_app.tools.github.repo_models import (
     GitHubRepoGetInput, GitHubGetFileInput, GitHubListBranchesInput,
-    GitHubListCommitsInput, GitHubCompareRefsInput, GitHubCreateBranchInput,
-    GitHubWriteFileInput,
+    GitHubListCommitsInput, GitHubCompareRefsInput,
     GitHubRepository, GitHubFileContent, GitHubBranch, GitHubCommit,
-    GitHubComparison, GitHubWriteResult, GitHubRepoToolOutput
+    GitHubComparison, GitHubRepoToolOutput
 )
 
 logger = logging.getLogger("VitalAgentContainerLogger")
@@ -26,15 +25,12 @@ MAX_PATCH_CHARS = 2000
 
 
 class GitHubRepoTool(AbstractTool):
-    """Repository metadata, contents and refs.
+    """Repository metadata, contents and refs -- reads only.
 
-    Reads are gated only by the repo allowlist. create_branch rides on
-    allow_writes -- it points a ref at an existing commit and changes no file.
-    create_or_update_file is the one operation in the service that writes
-    repository content, so it has its own gate (allow_content_writes, default
-    off), and committing to the default branch needs allow_default_branch_writes
-    on top. The intended flow is create_branch -> create_or_update_file ->
-    create_pr, so a human reviews before anything lands on the default branch.
+    Every operation here is a read, gated only by the repo allowlist, so
+    registering this tool grants an agent no ability to change anything.
+    Operations that alter code (create_branch, create_or_update_file) live in
+    github_code_tool: authority, not GitHub resource, decides the boundary.
     """
 
     def __init__(self, config: dict, client: GitHubClient):
@@ -46,8 +42,6 @@ class GitHubRepoTool(AbstractTool):
             GitHubListBranchesInput: self._list_branches,
             GitHubListCommitsInput: self._list_commits,
             GitHubCompareRefsInput: self._compare_refs,
-            GitHubCreateBranchInput: self._create_branch,
-            GitHubWriteFileInput: self._write_file,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -68,27 +62,6 @@ class GitHubRepoTool(AbstractTool):
                     "owner": "vital-ai",
                     "repo": "vital-ai-sandbox",
                     "path": "README.md"
-                }
-            },
-            {
-                "tool": "github_repo_tool",
-                "tool_input": {
-                    "operation": "create_branch",
-                    "owner": "vital-ai",
-                    "repo": "vital-ai-sandbox",
-                    "branch": "fix/flaky-test"
-                }
-            },
-            {
-                "tool": "github_repo_tool",
-                "tool_input": {
-                    "operation": "create_or_update_file",
-                    "owner": "vital-ai",
-                    "repo": "vital-ai-sandbox",
-                    "path": "notes.md",
-                    "content": "Investigated the flaky test.\n",
-                    "message": "Add investigation notes",
-                    "branch": "fix/flaky-test"
                 }
             },
             {
@@ -323,89 +296,6 @@ class GitHubRepoTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
-    async def _create_branch(self, vi: GitHubCreateBranchInput) -> GitHubRepoToolOutput:
-        full_name = self.client.check_repo(vi.owner, vi.repo)
-        # A branch is a ref pointing at an existing commit -- no content changes,
-        # so this rides on allow_writes rather than allow_content_writes.
-        self.client.check_write_allowed('create_branch')
-
-        from_ref = vi.from_ref or await self._default_branch(full_name, vi.owner, vi.repo)
-
-        ref_response = await self.client.call(
-            self.client.gh.rest.git.async_get_ref,
-            vi.owner, vi.repo, f"heads/{from_ref}",
-            context=f"create_branch resolve {full_name}:{from_ref}"
-        )
-        sha = ((ref_response.json() or {}).get('object') or {}).get('sha')
-        if not sha:
-            raise GitHubToolError(
-                f"Could not resolve '{from_ref}' on {full_name} to a commit."
-            )
-
-        response = await self.client.call(
-            self.client.gh.rest.git.async_create_ref,
-            vi.owner, vi.repo,
-            data={'ref': f"refs/heads/{vi.branch}", 'sha': sha},
-            context=f"create_branch {full_name}:{vi.branch}"
-        )
-
-        created = response.json() or {}
-        return GitHubRepoToolOutput(
-            operation='create_branch',
-            repository=full_name,
-            branch=GitHubBranch(
-                name=vi.branch,
-                sha=(created.get('object') or {}).get('sha') or sha,
-                is_default=False,
-            ),
-            rate_limit_remaining=rate_limit_remaining(response)
-        )
-
-    async def _write_file(self, vi: GitHubWriteFileInput) -> GitHubRepoToolOutput:
-        full_name = self.client.check_repo(vi.owner, vi.repo)
-        self.client.check_write_allowed('create_or_update_file', gate='allow_content_writes')
-
-        default_branch = await self._default_branch(full_name, vi.owner, vi.repo)
-        self.client.check_default_branch_write(vi.branch, default_branch, full_name)
-
-        # GitHub needs the current blob SHA to replace an existing file. Look it
-        # up rather than making the caller do it, but only when not supplied.
-        sha = vi.sha
-        if sha is None:
-            sha = await self._existing_blob_sha(full_name, vi.owner, vi.repo, vi.path, vi.branch)
-
-        data: Dict[str, Any] = {
-            'message': vi.message,
-            'content': base64.b64encode(vi.content.encode('utf-8')).decode('ascii'),
-            'branch': vi.branch,
-        }
-        if sha:
-            data['sha'] = sha
-
-        response = await self.client.call(
-            self.client.gh.rest.repos.async_create_or_update_file_contents,
-            vi.owner, vi.repo, vi.path, data=data,
-            context=f"create_or_update_file {full_name}:{vi.path} on {vi.branch}"
-        )
-
-        raw = response.json() or {}
-        commit = raw.get('commit') or {}
-        content = raw.get('content') or {}
-
-        return GitHubRepoToolOutput(
-            operation='create_or_update_file',
-            repository=full_name,
-            write_result=GitHubWriteResult(
-                path=vi.path,
-                branch=vi.branch,
-                commit_sha=commit.get('sha'),
-                blob_sha=content.get('sha'),
-                created=sha is None,
-                html_url=commit.get('html_url'),
-            ),
-            rate_limit_remaining=rate_limit_remaining(response)
-        )
-
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -423,26 +313,6 @@ class GitHubRepoTool(AbstractTool):
                 f"Unexpected response resolving the default branch for {full_name}."
             )
         return data.get('default_branch') or 'main'
-
-    async def _existing_blob_sha(self, full_name: str, owner: str, repo: str,
-                                 path: str, branch: str) -> Optional[str]:
-        """Blob SHA of an existing file, or None if it does not exist yet."""
-        try:
-            response = await self.client.call(
-                self.client.gh.rest.repos.async_get_content,
-                owner, repo, path, ref=branch,
-                context=f"resolve blob sha {full_name}:{path}"
-            )
-        except GitHubToolError as e:
-            if e.status_code == 404:
-                return None
-            raise
-        data = response.json()
-        if isinstance(data, list):
-            raise GitHubToolError(
-                f"'{path}' on {full_name} is a directory, not a file."
-            )
-        return (data or {}).get('sha')
 
     @staticmethod
     def _map_commit(data: dict) -> GitHubCommit:
@@ -513,17 +383,11 @@ class GitHubRepoTool(AbstractTool):
                         f"truncated={f.content_truncated} entries={len(f.entries)}")
         if output.branches:
             logger.info(f"Branches: {[b.name for b in output.branches]}")
-        if output.branch:
-            logger.info(f"Created branch {output.branch.name} at {output.branch.sha}")
         if output.commits:
             logger.info(f"Commits: {len(output.commits)}")
         if output.comparison:
             c = output.comparison
             logger.info(f"Comparison: {c.status} ahead={c.ahead_by} behind={c.behind_by} "
                         f"files={c.files_changed}")
-        if output.write_result:
-            w = output.write_result
-            logger.info(f"{'Created' if w.created else 'Updated'} {w.path} on {w.branch} "
-                        f"-> commit {w.commit_sha}")
         logger.info(f"Rate limit remaining: {output.rate_limit_remaining}")
         logger.info("=" * 80)

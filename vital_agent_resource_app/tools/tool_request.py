@@ -20,6 +20,9 @@ from vital_agent_resource_app.tools.github.actions_models import (
 from vital_agent_resource_app.tools.github.repo_models import (
     GitHubRepoToolInput, GITHUB_REPO_OPERATION_MODELS
 )
+from vital_agent_resource_app.tools.github.code_models import (
+    GitHubCodeToolInput, GITHUB_CODE_OPERATION_MODELS
+)
 from vital_agent_resource_app.tools.send_email.models import EmailInput
 from vital_agent_resource_app.tools.send_message.models import (
     LoopLookupSingleInput, LoopLookupBulkInput, LoopLookupStatusInput,
@@ -47,7 +50,8 @@ ToolInputType = Union[
     GitHubIssueToolInput,
     GitHubPRToolInput,
     GitHubActionsToolInput,
-    GitHubRepoToolInput
+    GitHubRepoToolInput,
+    GitHubCodeToolInput
 ]
 
 # Map tool names to their primary input model for disambiguation
@@ -63,6 +67,7 @@ _TOOL_INPUT_MODEL_MAP = {
     ToolName.github_pr_tool: GITHUB_PR_OPERATION_MODELS,
     ToolName.github_actions_tool: GITHUB_ACTIONS_OPERATION_MODELS,
     ToolName.github_repo_tool: GITHUB_REPO_OPERATION_MODELS,
+    ToolName.github_code_tool: GITHUB_CODE_OPERATION_MODELS,
 }
 
 def _get_json_schema_extra(schema, model_type):

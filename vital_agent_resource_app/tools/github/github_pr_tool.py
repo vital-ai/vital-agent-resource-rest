@@ -11,9 +11,9 @@ from vital_agent_resource_app.tools.github.github_client import (
 from vital_agent_resource_app.tools.github.pr_models import (
     GitHubPRListInput, GitHubPRGetInput, GitHubPRCreateInput, GitHubPRUpdateInput,
     GitHubPRFilesInput, GitHubPRCommentListInput, GitHubPRCommentCreateInput,
-    GitHubPRReviewListInput, GitHubPRReviewCreateInput, GitHubPRMergeInput,
+    GitHubPRReviewListInput, GitHubPRReviewCreateInput,
     GitHubPullRequest, GitHubPRFile, GitHubPRReview, GitHubPRComment,
-    GitHubPRMergeResult, GitHubPRToolOutput
+    GitHubPRToolOutput
 )
 
 logger = logging.getLogger("VitalAgentContainerLogger")
@@ -23,11 +23,15 @@ MAX_PATCH_CHARS = 2000
 
 
 class GitHubPRTool(AbstractTool):
-    """GitHub pull request operations.
+    """GitHub pull request operations -- metadata only.
 
-    Merging and approving are gated behind allow_pr_merge (default off) because
-    both can put code on a protected branch; everything else rides on
-    allow_writes like the issue tool.
+    Listing, opening, updating, commenting and reviewing. merge_pr lives in
+    github_code_tool: merging lands commits on the base branch, which is a code
+    change, and this service separates tools by authority rather than by GitHub
+    resource.
+
+    An APPROVE review still rides on allow_pr_merge, since approving can satisfy
+    branch protection and unblock a merge someone else performs.
     """
 
     def __init__(self, config: dict, client: GitHubClient):
@@ -43,7 +47,6 @@ class GitHubPRTool(AbstractTool):
             GitHubPRCommentCreateInput: self._add_pr_comment,
             GitHubPRReviewListInput: self._list_pr_reviews,
             GitHubPRReviewCreateInput: self._create_pr_review,
-            GitHubPRMergeInput: self._merge_pr,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -354,36 +357,6 @@ class GitHubPRTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
-    async def _merge_pr(self, vi: GitHubPRMergeInput) -> GitHubPRToolOutput:
-        full_name = self.client.check_repo(vi.owner, vi.repo)
-        self.client.check_write_allowed('merge_pr', gate='allow_pr_merge')
-
-        data: Dict[str, Any] = {'merge_method': vi.merge_method or 'merge'}
-        if vi.commit_title:
-            data['commit_title'] = vi.commit_title
-        if vi.commit_message:
-            data['commit_message'] = vi.commit_message
-        if vi.sha:
-            data['sha'] = vi.sha
-
-        response = await self.client.call(
-            self.client.gh.rest.pulls.async_merge,
-            vi.owner, vi.repo, vi.pr_number, data=data,
-            context=f"merge_pr {full_name}#{vi.pr_number}"
-        )
-
-        raw = response.json() or {}
-        return GitHubPRToolOutput(
-            operation='merge_pr',
-            repository=full_name,
-            merge_result=GitHubPRMergeResult(
-                merged=bool(raw.get('merged')),
-                sha=raw.get('sha'),
-                message=raw.get('message')
-            ),
-            rate_limit_remaining=rate_limit_remaining(response)
-        )
-
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -514,8 +487,6 @@ class GitHubPRTool(AbstractTool):
         if output.review:
             logger.info(f"Review submitted: {output.review.state} by {output.review.user}")
 
-        if output.merge_result:
-            logger.info(f"Merge: merged={output.merge_result.merged} sha={output.merge_result.sha}")
 
         logger.info(f"Rate limit remaining: {output.rate_limit_remaining}")
         logger.info("=" * 80)

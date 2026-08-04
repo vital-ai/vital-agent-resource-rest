@@ -119,8 +119,9 @@ class GitHubPRReviewListInput(GitHubRepoBase):
 class GitHubPRReviewCreateInput(GitHubRepoBase):
     """Submit a review on a pull request.
 
-    APPROVE is gated behind allow_pr_merge along with merge_pr, since an
-    approving review can satisfy a branch protection rule and unblock a merge.
+    APPROVE is gated behind allow_pr_merge, since an approving review can satisfy
+    a branch protection rule and unblock a merge. merge_pr itself lives in
+    github_code_tool -- merging lands commits, which is a code change.
     """
     operation: Literal["create_pr_review"] = Field(..., description="Operation to perform")
     pr_number: int = Field(..., description="Pull request number", ge=1)
@@ -128,20 +129,6 @@ class GitHubPRReviewCreateInput(GitHubRepoBase):
         ..., description="Review verdict"
     )
     body: Optional[str] = Field(None, description="Review body; required for REQUEST_CHANGES and COMMENT")
-
-
-class GitHubPRMergeInput(GitHubRepoBase):
-    """Merge a pull request. Gated behind allow_pr_merge, off by default."""
-    operation: Literal["merge_pr"] = Field(..., description="Operation to perform")
-    pr_number: int = Field(..., description="Pull request number", ge=1)
-    merge_method: Optional[Literal["merge", "squash", "rebase"]] = Field(
-        "merge", description="How to merge"
-    )
-    commit_title: Optional[str] = Field(None, description="Title for the merge commit")
-    commit_message: Optional[str] = Field(None, description="Body for the merge commit")
-    sha: Optional[str] = Field(
-        None, description="Head SHA the merge must match; guards against merging newer commits"
-    )
 
 
 GitHubPRToolInput = Union[
@@ -154,7 +141,6 @@ GitHubPRToolInput = Union[
     GitHubPRCommentCreateInput,
     GitHubPRReviewListInput,
     GitHubPRReviewCreateInput,
-    GitHubPRMergeInput,
 ]
 
 GITHUB_PR_OPERATION_MODELS = {
@@ -167,7 +153,6 @@ GITHUB_PR_OPERATION_MODELS = {
     "add_pr_comment": GitHubPRCommentCreateInput,
     "list_pr_reviews": GitHubPRReviewListInput,
     "create_pr_review": GitHubPRReviewCreateInput,
-    "merge_pr": GitHubPRMergeInput,
 }
 
 
@@ -236,12 +221,6 @@ class GitHubPRComment(BaseModel):
     updated_at: Optional[str] = Field(None, description="Last update timestamp")
 
 
-class GitHubPRMergeResult(BaseModel):
-    merged: bool = Field(..., description="Whether the merge succeeded")
-    sha: Optional[str] = Field(None, description="SHA of the merge commit")
-    message: Optional[str] = Field(None, description="Message returned by GitHub")
-
-
 class GitHubPRToolOutput(GitHubOutputBase):
     """Output model for the GitHub pull request tool"""
     tool: Literal["github_pr_tool"] = Field("github_pr_tool", description="Tool identifier")
@@ -253,7 +232,6 @@ class GitHubPRToolOutput(GitHubOutputBase):
     review: Optional[GitHubPRReview] = Field(None, description="Newly created review")
     comments: List[GitHubPRComment] = Field(default_factory=list, description="Conversation comments")
     comment: Optional[GitHubPRComment] = Field(None, description="Newly created comment")
-    merge_result: Optional[GitHubPRMergeResult] = Field(None, description="Outcome of a merge")
     next_page: Optional[int] = Field(
         None,
         description="Page to request for the next batch, or null if there is no more. "

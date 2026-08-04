@@ -6,6 +6,10 @@ from vital_agent_resource_app.tools.github.common_models import GitHubRepoBase, 
 
 # ---------------------------------------------------------------------------
 # Input models
+#
+# Read-only. Operations that change repository code (create_branch,
+# create_or_update_file) moved to github_code_tool so that registering this tool
+# grants no write authority -- see code_models.py.
 # ---------------------------------------------------------------------------
 
 class GitHubRepoGetInput(GitHubRepoBase):
@@ -72,51 +76,12 @@ class GitHubCompareRefsInput(GitHubRepoBase):
     max_files: Optional[int] = Field(50, description="Maximum changed files to return", ge=1, le=100)
 
 
-class GitHubCreateBranchInput(GitHubRepoBase):
-    """Create a branch.
-
-    Creates a ref pointing at an existing commit; it does not change any file, so
-    it is gated by allow_writes rather than allow_content_writes. This is the
-    operation that makes create_pr reachable.
-    """
-    operation: Literal["create_branch"] = Field(..., description="Operation to perform")
-    branch: str = Field(..., description="New branch name", min_length=1)
-    from_ref: Optional[str] = Field(
-        None, description="Branch or SHA to branch from. Defaults to the default branch.")
-
-
-class GitHubWriteFileInput(GitHubRepoBase):
-    """Create or update a file, committing the change.
-
-    Gated by allow_content_writes (default off) -- this is the only operation in
-    the service that writes repository content, which is a different authority
-    from filing an issue.
-
-    `branch` is required rather than defaulting: GitHub would otherwise commit to
-    the default branch, and an omitted field should not be the path to writing on
-    main. Writing to the default branch additionally requires
-    allow_default_branch_writes, so the normal flow is create_branch -> write ->
-    create_pr.
-    """
-    operation: Literal["create_or_update_file"] = Field(..., description="Operation to perform")
-    path: str = Field(..., description="Path within the repository", min_length=1)
-    content: str = Field(..., description="Full file content as text (not base64)")
-    message: str = Field(..., description="Commit message", min_length=1)
-    branch: str = Field(..., description="Branch to commit on", min_length=1)
-    sha: Optional[str] = Field(
-        None,
-        description="Blob SHA of the file being replaced. Required by GitHub when "
-                    "updating an existing file; the tool looks it up if omitted.")
-
-
 GitHubRepoToolInput = Union[
     GitHubRepoGetInput,
     GitHubGetFileInput,
     GitHubListBranchesInput,
     GitHubListCommitsInput,
     GitHubCompareRefsInput,
-    GitHubCreateBranchInput,
-    GitHubWriteFileInput,
 ]
 
 GITHUB_REPO_OPERATION_MODELS = {
@@ -125,8 +90,6 @@ GITHUB_REPO_OPERATION_MODELS = {
     "list_branches": GitHubListBranchesInput,
     "list_commits": GitHubListCommitsInput,
     "compare_refs": GitHubCompareRefsInput,
-    "create_branch": GitHubCreateBranchInput,
-    "create_or_update_file": GitHubWriteFileInput,
 }
 
 
@@ -194,15 +157,6 @@ class GitHubComparison(BaseModel):
     files_changed: Optional[int] = Field(None, description="Number of files changed")
 
 
-class GitHubWriteResult(BaseModel):
-    path: str = Field(..., description="Path written")
-    branch: str = Field(..., description="Branch committed to")
-    commit_sha: Optional[str] = Field(None, description="SHA of the resulting commit")
-    blob_sha: Optional[str] = Field(None, description="SHA of the written blob")
-    created: bool = Field(..., description="True if the file was created, false if updated")
-    html_url: Optional[str] = Field(None, description="Browser URL for the commit")
-
-
 class GitHubRepoToolOutput(GitHubOutputBase):
     """Output model for the GitHub repository tool"""
     tool: Literal["github_repo_tool"] = Field("github_repo_tool", description="Tool identifier")
@@ -211,13 +165,11 @@ class GitHubRepoToolOutput(GitHubOutputBase):
         None, description="Repository metadata")
     file: Optional[GitHubFileContent] = Field(None, description="File or directory contents")
     branches: List[GitHubBranch] = Field(default_factory=list, description="Branches")
-    branch: Optional[GitHubBranch] = Field(None, description="Newly created branch")
     commits: List[GitHubCommit] = Field(default_factory=list, description="Commits")
     comparison: Optional[GitHubComparison] = Field(None, description="Ref comparison summary")
     files: List[dict] = Field(
         default_factory=list, description="Changed files from compare_refs")
-    write_result: Optional[GitHubWriteResult] = Field(
-        None, description="Outcome of a content write")
+
 
     model_config = {
         "json_schema_extra": {
