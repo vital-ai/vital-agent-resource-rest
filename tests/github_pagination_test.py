@@ -23,7 +23,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vital_agent_resource_app.tools.github.github_issue_tool import (
     GitHubIssueTool, MAX_LIST_PAGES
 )
-from vital_agent_resource_app.tools.github.issue_models import GitHubIssueListInput
+from vital_agent_resource_app.tools.github.issue_models import (
+    GitHubIssueListInput, GitHubIssueCommentListInput, GitHubIssueSearchInput
+)
+from vital_agent_resource_app.tools.github.github_pr_tool import GitHubPRTool
+from vital_agent_resource_app.tools.github.pr_models import (
+    GitHubPRListInput, GitHubPRFilesInput, GitHubPRCommentListInput,
+    GitHubPRReviewListInput
+)
+from vital_agent_resource_app.tools.github.github_actions_tool import GitHubActionsTool
+from vital_agent_resource_app.tools.github.actions_models import (
+    GitHubActionsListWorkflowsInput, GitHubActionsListRunsInput,
+    GitHubActionsListJobsInput
+)
 
 PASSED = []
 FAILED = []
@@ -67,14 +79,23 @@ class FakeClient:
         self.rest = self
         self.issues = self
 
-    async def async_list_for_repo(self, *args, **kwargs):  # pragma: no cover - unused
-        raise AssertionError("call() should intercept before reaching the endpoint")
+    def __getattr__(self, name):
+        # client.gh.rest.<namespace>.<endpoint> has to resolve for every tool.
+        # call() intercepts before the endpoint is invoked, so any attribute can
+        # answer with the fake itself.
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return self
 
     def check_repo(self, owner, repo):
         return f"{owner}/{repo}"
 
     def check_write_allowed(self, *args, **kwargs):
         return None
+
+    @staticmethod
+    def scoped_search_query(full_name, query):
+        return f"repo:{full_name} {query}".strip()
 
     async def call(self, func, *args, context='', **kwargs):
         page = kwargs.get('page', 1)
@@ -87,15 +108,25 @@ class FakeClient:
         payload = []
         for offset, kind in enumerate(window):
             number = start + offset + 1   # stable id: position in the record list
+            # A superset of the keys the various mappers read, so one fake can
+            # serve issues, comments, PRs, files, reviews, workflows and jobs.
             item = {
                 'number': number,
+                'id': number,
                 'title': f"record {number}",
+                'name': f"record {number}",
+                'filename': f"file{number}.txt",
+                'path': f".github/workflows/w{number}.yml",
                 'state': 'open',
+                'status': 'completed',
+                'conclusion': 'success',
+                'body': f"body {number}",
                 'html_url': f"https://example.invalid/{number}",
                 'user': {'login': 'tester'},
                 'labels': [],
                 'assignees': [],
                 'comments': 0,
+                'steps': [],
             }
             if kind == 'P':
                 item['pull_request'] = {'url': 'https://example.invalid/pr'}
@@ -161,8 +192,100 @@ async def scenario(name, records, max_results):
           f"missed {missing}; expected {expected}, saw {seen}")
 
 
+class EnvelopeClient(FakeClient):
+    """Serves a full page plus a next link, for operations whose payload is an
+    envelope ({'total_count': N, '<key>': [...]}) rather than a bare list."""
+
+    def __init__(self, count, key=None):
+        super().__init__('I' * count)
+        self.key = key
+
+    async def call(self, func, *args, context='', **kwargs):
+        response = await super().call(func, *args, **kwargs)
+        if self.key:
+            response._records = {
+                'total_count': len(self.records),
+                self.key: response._records,
+            }
+        return response
+
+
+async def test_every_list_operation():
+    """truncated => next_page must hold for every list operation, in every tool.
+
+    list_pr_reviews and list_run_jobs shipped without page input or next_page,
+    so they could report truncated with no way to reach the rest -- the same
+    invariant violation fixed in _list_issues, still live in two siblings
+    because nothing checked them uniformly.
+    """
+    print("\n4. truncated => next_page, across every list operation")
+
+    # (label, tool class, input, payload key for envelope responses)
+    cases = [
+        ('issue.list_issues', GitHubIssueTool,
+         GitHubIssueListInput(operation='list_issues', owner='o', repo='r',
+                              state='all', max_results=2), None),
+        ('issue.list_comments', GitHubIssueTool,
+         GitHubIssueCommentListInput(operation='list_comments', owner='o', repo='r',
+                                     issue_number=1, max_results=2), None),
+        ('issue.search_issues', GitHubIssueTool,
+         GitHubIssueSearchInput(operation='search_issues', owner='o', repo='r',
+                                query='x', max_results=2), 'items'),
+        ('pr.list_prs', GitHubPRTool,
+         GitHubPRListInput(operation='list_prs', owner='o', repo='r',
+                           max_results=2), None),
+        ('pr.list_pr_files', GitHubPRTool,
+         GitHubPRFilesInput(operation='list_pr_files', owner='o', repo='r',
+                            pr_number=1, max_results=2), None),
+        ('pr.list_pr_comments', GitHubPRTool,
+         GitHubPRCommentListInput(operation='list_pr_comments', owner='o', repo='r',
+                                  pr_number=1, max_results=2), None),
+        ('pr.list_pr_reviews', GitHubPRTool,
+         GitHubPRReviewListInput(operation='list_pr_reviews', owner='o', repo='r',
+                                 pr_number=1, max_results=2), None),
+        ('actions.list_workflows', GitHubActionsTool,
+         GitHubActionsListWorkflowsInput(operation='list_workflows', owner='o', repo='r',
+                                         max_results=2), 'workflows'),
+        ('actions.list_workflow_runs', GitHubActionsTool,
+         GitHubActionsListRunsInput(operation='list_workflow_runs', owner='o', repo='r',
+                                    max_results=2), 'workflow_runs'),
+        ('actions.list_run_jobs', GitHubActionsTool,
+         GitHubActionsListJobsInput(operation='list_run_jobs', owner='o', repo='r',
+                                    run_id=1, max_results=2), 'jobs'),
+    ]
+
+    handler_for = {
+        'list_issues': '_list_issues', 'list_comments': '_list_comments',
+        'search_issues': '_search_issues', 'list_prs': '_list_prs',
+        'list_pr_files': '_list_pr_files', 'list_pr_comments': '_list_pr_comments',
+        'list_pr_reviews': '_list_pr_reviews',
+        'list_workflows': '_list_workflows', 'list_workflow_runs': '_list_runs',
+        'list_run_jobs': '_list_jobs',
+    }
+
+    for label, tool_cls, vi, key in cases:
+        # 6 records at max_results=2 means more always remain.
+        client = EnvelopeClient(6, key)
+        tool = tool_cls({}, client)
+        out = await getattr(tool, handler_for[vi.operation])(vi)
+
+        if not out.truncated:
+            check(f'{label}: reports truncated when more remain', False,
+                  f"truncated={out.truncated} returned={out.returned_count}")
+            continue
+        check(f'{label}: truncated implies next_page',
+              out.next_page is not None,
+              'truncated=True with next_page=None -- the rest is unreachable')
+
+    # And every one of them must accept a page input at all.
+    for label, _, vi, _ in cases:
+        check(f'{label}: accepts a page input',
+              'page' in type(vi).model_fields,
+              f"{type(vi).__name__} has no page field, so nothing can be resumed")
+
+
 async def main():
-    print("Synthetic pagination tests for list_issues")
+    print("Synthetic pagination tests for the GitHub tools")
     print("=" * 62)
     print(f"MAX_LIST_PAGES = {MAX_LIST_PAGES}")
 
@@ -243,6 +366,8 @@ async def main():
         operation='list_issues', owner='o', repo='r', state='all', max_results=10))
     check(f'one call costs at most MAX_LIST_PAGES ({MAX_LIST_PAGES}) requests',
           len(client.requests) <= MAX_LIST_PAGES, f"made {len(client.requests)}")
+
+    await test_every_list_operation()
 
     print("\n" + "=" * 62)
     print(f"Passed: {len(PASSED)}   Failed: {len(FAILED)}")

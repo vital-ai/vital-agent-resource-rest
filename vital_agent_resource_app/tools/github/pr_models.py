@@ -111,6 +111,9 @@ class GitHubPRReviewListInput(GitHubRepoBase):
     operation: Literal["list_pr_reviews"] = Field(..., description="Operation to perform")
     pr_number: int = Field(..., description="Pull request number", ge=1)
     max_results: Optional[int] = Field(30, description="Maximum reviews to return", ge=1, le=100)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
 
 
 class GitHubPRReviewCreateInput(GitHubRepoBase):

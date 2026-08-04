@@ -54,6 +54,9 @@ class GitHubActionsListJobsInput(GitHubRepoBase):
     run_id: int = Field(..., description="Workflow run id", ge=1)
     filter: Optional[Literal["latest", "all"]] = Field("latest", description="Which attempt's jobs")
     max_results: Optional[int] = Field(30, description="Maximum jobs to return", ge=1, le=100)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
 
 
 class GitHubActionsTriggerInput(GitHubRepoBase):

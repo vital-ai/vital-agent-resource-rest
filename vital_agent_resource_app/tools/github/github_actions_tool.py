@@ -216,17 +216,28 @@ class GitHubActionsTool(AbstractTool):
         full_name = self.client.check_repo(vi.owner, vi.repo)
         max_results = vi.max_results or 30
 
+        kwargs: Dict[str, Any] = {
+            # githubkit renames the `filter` query param to `filter_` to avoid
+            # shadowing the builtin.
+            'filter_': vi.filter or 'latest',
+            'per_page': min(max_results, 100),
+        }
+        if vi.page:
+            kwargs['page'] = vi.page
+
         response = await self.client.call(
             self.client.gh.rest.actions.async_list_jobs_for_workflow_run,
             vi.owner, vi.repo, vi.run_id,
-            # githubkit renames the `filter` query param to `filter_` to avoid
-            # shadowing the builtin.
-            filter_=vi.filter or 'latest', per_page=min(max_results, 100),
-            context=f"list_run_jobs {full_name} run={vi.run_id}"
+            context=f"list_run_jobs {full_name} run={vi.run_id}", **kwargs
         )
 
         raw = response.json() or {}
         jobs = [self._map_job(j) for j in raw.get('jobs', [])]
+        # total_count is the corpus total, so more remain if this page did not
+        # reach it -- or if GitHub advertised another page.
+        more = has_next_page(response) or \
+            (raw.get('total_count') or 0) > (((vi.page or 1) - 1) * max_results
+                                             + len(jobs[:max_results]))
 
         return GitHubActionsToolOutput(
             operation='list_run_jobs',
@@ -234,7 +245,8 @@ class GitHubActionsTool(AbstractTool):
             jobs=jobs[:max_results],
             returned_count=len(jobs[:max_results]),
             total_count=raw.get('total_count'),
-            truncated=(raw.get('total_count') or 0) > len(jobs[:max_results]),
+            truncated=more,
+            next_page=((vi.page or 1) + 1) if more else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 

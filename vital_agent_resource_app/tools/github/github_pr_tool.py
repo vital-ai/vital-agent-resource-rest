@@ -302,10 +302,14 @@ class GitHubPRTool(AbstractTool):
         full_name = self.client.check_repo(vi.owner, vi.repo)
         max_results = vi.max_results or 30
 
+        kwargs: Dict[str, Any] = {'per_page': min(max_results, 100)}
+        if vi.page:
+            kwargs['page'] = vi.page
+
         response = await self.client.call(
             self.client.gh.rest.pulls.async_list_reviews,
-            vi.owner, vi.repo, vi.pr_number, per_page=min(max_results, 100),
-            context=f"list_pr_reviews {full_name}#{vi.pr_number}"
+            vi.owner, vi.repo, vi.pr_number,
+            context=f"list_pr_reviews {full_name}#{vi.pr_number}", **kwargs
         )
 
         raw = response.json() or []
@@ -317,6 +321,7 @@ class GitHubPRTool(AbstractTool):
             reviews=reviews[:max_results],
             returned_count=len(reviews[:max_results]),
             truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
