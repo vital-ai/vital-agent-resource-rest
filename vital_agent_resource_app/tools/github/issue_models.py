@@ -150,6 +150,13 @@ class GitHubIssueAddLabelsInput(GitHubRepoBase):
     operation: Literal["add_labels"] = Field(..., description="Operation to perform")
     issue_number: int = Field(..., description="Issue number", ge=1)
     labels: List[str] = Field(..., description="Labels to add", min_length=1)
+    validate_labels: Optional[bool] = Field(
+        True,
+        description="Reject names that do not already exist on the repository. On by "
+                    "default because GitHub creates unknown labels on write, so a typo "
+                    "silently adds a label to the repository. Set false to allow "
+                    "create-on-write. Use list_labels to see valid names."
+    )
 
 
 class GitHubIssueRemoveLabelsInput(GitHubRepoBase):
@@ -171,6 +178,47 @@ class GitHubIssueRemoveAssigneesInput(GitHubRepoBase):
     operation: Literal["remove_assignees"] = Field(..., description="Operation to perform")
     issue_number: int = Field(..., description="Issue number", ge=1)
     assignees: List[str] = Field(..., description="Logins to remove", min_length=1)
+
+
+class GitHubIssueListLabelsInput(GitHubRepoBase):
+    """List the labels defined on a repository.
+
+    Exists so an agent can discover valid label names rather than guessing:
+    add_labels takes free text, and an unknown name creates a new label.
+    """
+    operation: Literal["list_labels"] = Field(..., description="Operation to perform")
+    max_results: Optional[int] = Field(100, description="Maximum labels to return", ge=1, le=100)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
+
+
+class GitHubIssueListMilestonesInput(GitHubRepoBase):
+    """List milestones on a repository.
+
+    create_issue and update_issue take a milestone *number*; this is how an agent
+    finds one.
+    """
+    operation: Literal["list_milestones"] = Field(..., description="Operation to perform")
+    state: Optional[Literal["open", "closed", "all"]] = Field("open", description="Milestone state")
+    max_results: Optional[int] = Field(30, description="Maximum milestones to return", ge=1, le=100)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
+
+
+class GitHubIssueListAssignableUsersInput(GitHubRepoBase):
+    """List the users who can be assigned to issues in this repository.
+
+    This is the set GitHub will actually accept -- narrower than collaborators.
+    GitHub silently ignores an unassignable login rather than rejecting it, so
+    this is how an agent avoids a write that reports success and does nothing.
+    """
+    operation: Literal["list_assignable_users"] = Field(..., description="Operation to perform")
+    max_results: Optional[int] = Field(50, description="Maximum users to return", ge=1, le=100)
+    page: Optional[int] = Field(
+        None, description="Page to fetch; this operation reads exactly one page", ge=1
+    )
 
 
 class GitHubIssueSearchInput(GitHubRepoBase):
@@ -226,6 +274,9 @@ GitHubIssueToolInput = Union[
     GitHubIssueAddAssigneesInput,
     GitHubIssueRemoveAssigneesInput,
     GitHubIssueSearchInput,
+    GitHubIssueListLabelsInput,
+    GitHubIssueListMilestonesInput,
+    GitHubIssueListAssignableUsersInput,
 ]
 
 # operation string -> input model, used by the resolver in tool_request.py
@@ -245,6 +296,9 @@ GITHUB_ISSUE_OPERATION_MODELS = {
     "add_assignees": GitHubIssueAddAssigneesInput,
     "remove_assignees": GitHubIssueRemoveAssigneesInput,
     "search_issues": GitHubIssueSearchInput,
+    "list_labels": GitHubIssueListLabelsInput,
+    "list_milestones": GitHubIssueListMilestonesInput,
+    "list_assignable_users": GitHubIssueListAssignableUsersInput,
 }
 
 
@@ -281,6 +335,22 @@ class GitHubComment(BaseModel):
     updated_at: Optional[str] = Field(None, description="Last update timestamp")
 
 
+class GitHubLabel(BaseModel):
+    name: str = Field(..., description="Label name, as passed to add_labels")
+    description: Optional[str] = Field(None, description="Label description")
+    color: Optional[str] = Field(None, description="Hex colour, without the leading #")
+
+
+class GitHubMilestone(BaseModel):
+    number: int = Field(..., description="Milestone number, as passed to create_issue")
+    title: str = Field(..., description="Milestone title")
+    state: Optional[str] = Field(None, description="open or closed")
+    description: Optional[str] = Field(None, description="Milestone description")
+    open_issues: Optional[int] = Field(None, description="Open issues in this milestone")
+    closed_issues: Optional[int] = Field(None, description="Closed issues in this milestone")
+    due_on: Optional[str] = Field(None, description="Due date, if set")
+
+
 class GitHubIssueToolOutput(GitHubOutputBase):
     """Output model for the GitHub issue tool"""
     tool: Literal["github_issue_tool"] = Field("github_issue_tool", description="Tool identifier")
@@ -290,6 +360,13 @@ class GitHubIssueToolOutput(GitHubOutputBase):
     comments: List[GitHubComment] = Field(default_factory=list, description="Comments from list operations")
     comment: Optional[GitHubComment] = Field(None, description="Comment from single-comment operations")
     deleted_id: Optional[int] = Field(None, description="Id of a deleted resource")
+    labels: List[GitHubLabel] = Field(
+        default_factory=list, description="Repository labels, from list_labels")
+    milestones: List[GitHubMilestone] = Field(
+        default_factory=list, description="Repository milestones, from list_milestones")
+    assignable_users: List[str] = Field(
+        default_factory=list,
+        description="Logins that can be assigned, from list_assignable_users")
     next_page: Optional[int] = Field(
         None,
         description="Page to request for the next batch, or null if there is no more. "

@@ -16,8 +16,9 @@ from vital_agent_resource_app.tools.github.issue_models import (
     GitHubIssueCommentUpdateInput, GitHubIssueCommentDeleteInput,
     GitHubIssueAddLabelsInput, GitHubIssueRemoveLabelsInput,
     GitHubIssueAddAssigneesInput, GitHubIssueRemoveAssigneesInput,
-    GitHubIssueSearchInput,
-    GitHubIssue, GitHubComment, GitHubIssueToolOutput
+    GitHubIssueSearchInput, GitHubIssueListLabelsInput,
+    GitHubIssueListMilestonesInput, GitHubIssueListAssignableUsersInput,
+    GitHubIssue, GitHubComment, GitHubLabel, GitHubMilestone, GitHubIssueToolOutput
 )
 
 logger = logging.getLogger("VitalAgentContainerLogger")
@@ -65,6 +66,9 @@ class GitHubIssueTool(AbstractTool):
             GitHubIssueAddAssigneesInput: self._add_assignees,
             GitHubIssueRemoveAssigneesInput: self._remove_assignees,
             GitHubIssueSearchInput: self._search_issues,
+            GitHubIssueListLabelsInput: self._list_labels,
+            GitHubIssueListMilestonesInput: self._list_milestones,
+            GitHubIssueListAssignableUsersInput: self._list_assignable_users,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -444,6 +448,19 @@ class GitHubIssueTool(AbstractTool):
         full_name = self.client.check_repo(vi.owner, vi.repo)
         self.client.check_write_allowed('add_labels')
 
+        if vi.validate_labels is not False:
+            # GitHub creates unknown labels on write, so an unchecked typo mutates
+            # the repository's label set. Check first and refuse, rather than
+            # discovering it afterwards.
+            known = await self._repo_label_names(full_name, vi.owner, vi.repo)
+            unknown = [l for l in vi.labels if l.lower() not in known]
+            if unknown:
+                raise GitHubToolError(
+                    f"Unknown labels {unknown}: this repository has "
+                    f"{sorted(known) or 'no labels'}. Use list_labels to see valid names, "
+                    f"or set validate_labels=false to create labels on write."
+                )
+
         await self.client.call(
             self.client.gh.rest.issues.async_add_labels,
             vi.owner, vi.repo, vi.issue_number, data={'labels': vi.labels},
@@ -538,10 +555,31 @@ class GitHubIssueTool(AbstractTool):
             vi.owner, vi.repo, vi.issue_number, data={'assignees': vi.assignees},
             context=f"add_assignees {full_name}#{vi.issue_number}"
         )
+
+        issue = self._map_issue(response.json())
+
+        # GitHub returns 201 and silently drops logins that cannot be assigned,
+        # so an unchecked call reports success having assigned nobody. Compare
+        # what was asked for against what came back and say so.
+        assigned = {a.lower() for a in (issue.assignees if issue else [])}
+        rejected = [a for a in vi.assignees if a.lower() not in assigned]
+
+        api_error = None
+        if rejected:
+            actually = [a for a in vi.assignees if a.lower() in assigned]
+            api_error = (
+                f"GitHub did not assign {rejected} -- those logins are not assignable on "
+                f"{full_name} (no such user, or no access). "
+                f"{'Assigned ' + str(actually) + '. ' if actually else 'Nobody was assigned. '}"
+                f"Use list_assignable_users to see valid logins."
+            )
+            logger.warning(f"add_assignees {full_name}#{vi.issue_number}: {api_error}")
+
         return GitHubIssueToolOutput(
             operation='add_assignees',
             repository=full_name,
-            issue=self._map_issue(response.json()),
+            issue=issue,
+            api_error=api_error,
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
@@ -604,9 +642,110 @@ class GitHubIssueTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
+    async def _list_labels(self, vi: GitHubIssueListLabelsInput) -> GitHubIssueToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        max_results = vi.max_results or 100
+
+        kwargs: Dict[str, Any] = {'per_page': min(max_results, 100)}
+        if vi.page:
+            kwargs['page'] = vi.page
+
+        response = await self.client.call(
+            self.client.gh.rest.issues.async_list_labels_for_repo,
+            vi.owner, vi.repo, context=f"list_labels {full_name}", **kwargs
+        )
+
+        raw = response.json() or []
+        labels = [GitHubLabel(name=l.get('name') or '',
+                              description=l.get('description'),
+                              color=l.get('color')) for l in raw]
+
+        return GitHubIssueToolOutput(
+            operation='list_labels',
+            repository=full_name,
+            labels=labels[:max_results],
+            returned_count=len(labels[:max_results]),
+            truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    async def _list_milestones(self, vi: GitHubIssueListMilestonesInput) -> GitHubIssueToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        max_results = vi.max_results or 30
+
+        kwargs: Dict[str, Any] = {
+            'state': vi.state or 'open',
+            'per_page': min(max_results, 100),
+        }
+        if vi.page:
+            kwargs['page'] = vi.page
+
+        response = await self.client.call(
+            self.client.gh.rest.issues.async_list_milestones,
+            vi.owner, vi.repo, context=f"list_milestones {full_name}", **kwargs
+        )
+
+        raw = response.json() or []
+        milestones = [GitHubMilestone(
+            number=m.get('number'),
+            title=m.get('title') or '',
+            state=m.get('state'),
+            description=m.get('description'),
+            open_issues=m.get('open_issues'),
+            closed_issues=m.get('closed_issues'),
+            due_on=m.get('due_on'),
+        ) for m in raw]
+
+        return GitHubIssueToolOutput(
+            operation='list_milestones',
+            repository=full_name,
+            milestones=milestones[:max_results],
+            returned_count=len(milestones[:max_results]),
+            truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    async def _list_assignable_users(
+            self, vi: GitHubIssueListAssignableUsersInput) -> GitHubIssueToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        max_results = vi.max_results or 50
+
+        kwargs: Dict[str, Any] = {'per_page': min(max_results, 100)}
+        if vi.page:
+            kwargs['page'] = vi.page
+
+        response = await self.client.call(
+            self.client.gh.rest.issues.async_list_assignees,
+            vi.owner, vi.repo, context=f"list_assignable_users {full_name}", **kwargs
+        )
+
+        raw = response.json() or []
+        logins = [u.get('login') for u in raw if u.get('login')]
+
+        return GitHubIssueToolOutput(
+            operation='list_assignable_users',
+            repository=full_name,
+            assignable_users=logins[:max_results],
+            returned_count=len(logins[:max_results]),
+            truncated=has_next_page(response),
+            next_page=((vi.page or 1) + 1) if has_next_page(response) else None,
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _repo_label_names(self, full_name: str, owner: str, repo: str) -> set:
+        """Lowercased set of label names defined on the repository."""
+        response = await self.client.call(
+            self.client.gh.rest.issues.async_list_labels_for_repo,
+            owner, repo, per_page=100,
+            context=f"validate labels {full_name}"
+        )
+        return {(l.get('name') or '').lower() for l in (response.json() or [])}
 
     async def _issue_result(self, operation: str, full_name: str, owner: str,
                             repo: str, issue_number: int) -> GitHubIssueToolOutput:

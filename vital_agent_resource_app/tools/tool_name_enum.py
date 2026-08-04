@@ -10,6 +10,7 @@ class ToolName(str, Enum):
     github_actions_tool = "github_actions_tool"
     github_issue_tool = "github_issue_tool"
     github_pr_tool = "github_pr_tool"
+    github_repo_tool = "github_repo_tool"
     google_address_validation_tool = "google_address_validation_tool"
     google_web_search_tool = "google_web_search_tool"
     loop_lookup_tool = "loop_lookup_tool"

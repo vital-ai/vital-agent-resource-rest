@@ -74,6 +74,9 @@ from vital_agent_resource_app.tools.github.pr_models import (
 from vital_agent_resource_app.tools.github.actions_models import (
     GitHubActionsToolInput, GitHubActionsToolOutput
 )
+from vital_agent_resource_app.tools.github.repo_models import (
+    GitHubRepoToolInput, GitHubRepoToolOutput
+)
 from vital_agent_resource_app.tools.weather.weather_tool import WeatherTool
 from vital_agent_resource_app.tools.web_search.google_web_search_tool import GoogleWebSearchTool
 from vital_agent_resource_app.tools.serper_web_search.serper_web_search_tool import SerperWebSearchTool
@@ -84,6 +87,7 @@ from vital_agent_resource_app.tools.github.github_client import GitHubClient
 from vital_agent_resource_app.tools.github.github_issue_tool import GitHubIssueTool
 from vital_agent_resource_app.tools.github.github_pr_tool import GitHubPRTool
 from vital_agent_resource_app.tools.github.github_actions_tool import GitHubActionsTool
+from vital_agent_resource_app.tools.github.github_repo_tool import GitHubRepoTool
 
 # Import model modules to register tools
 from vital_agent_resource_app.tools.google_address_validation import models as address_models
@@ -199,6 +203,13 @@ tool_registry.add_tool(
     input_model=GitHubActionsToolInput,
     output_model=GitHubActionsToolOutput,
     tool_instance=GitHubActionsTool(github_config, github_client)
+)
+
+tool_registry.add_tool(
+    tool_name=ToolName.github_repo_tool.value,
+    input_model=GitHubRepoToolInput,
+    output_model=GitHubRepoToolOutput,
+    tool_instance=GitHubRepoTool(github_config, github_client)
 )
 
 tool_registry.add_tool(

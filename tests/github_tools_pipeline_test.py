@@ -373,6 +373,113 @@ def test_pagination_no_gaps():
     check('the walk visited multiple pages', len(visited) > 1, str(visited))
 
 
+def test_enumeration_and_metadata():
+    """The Phase A additions, and the two silent failures they close."""
+    print("\n3d. Enumeration and metadata")
+
+    status, body = call({'operation': 'list_labels', 'owner': OWNER, 'repo': REPO})
+    out = tool_output(body)
+    names = [l['name'] for l in out.get('labels', [])]
+    check('list_labels returns the repository labels', 'bug' in names,
+          f"api_error={out.get('api_error')} labels={names}")
+    check('list_labels reports returned_count',
+          out.get('returned_count') == len(names), str(out.get('returned_count')))
+
+    status, body = call({'operation': 'list_milestones', 'owner': OWNER, 'repo': REPO})
+    out = tool_output(body)
+    check('list_milestones succeeds even with none defined',
+          out.get('api_error') is None, str(out.get('api_error')))
+
+    status, body = call({'operation': 'list_assignable_users', 'owner': OWNER, 'repo': REPO})
+    out = tool_output(body)
+    users = out.get('assignable_users', [])
+    check('list_assignable_users returns logins', len(users) > 0,
+          f"api_error={out.get('api_error')} users={users}")
+
+    status, body = call({'operation': 'get_repo', 'owner': OWNER, 'repo': REPO},
+                        tool='github_repo_tool')
+    out = tool_output(body)
+    info = out.get('repository_info') or {}
+    check('get_repo returns the default branch', bool(info.get('default_branch')),
+          f"api_error={out.get('api_error')} info={info}")
+    check('get_repo reports repository visibility', info.get('private') is not None)
+    check('get_repo supplies open_issues_count',
+          info.get('open_issues_count') is not None, str(info))
+
+    return users
+
+
+def test_silent_failures_are_now_loud(users):
+    """Regressions for the two failures reproduced before Phase A.
+
+    Both used to return a clean success: a bogus assignee assigned nobody, and an
+    unknown label silently created a repository label.
+    """
+    print("\n3e. Silent failures are now reported")
+
+    status, body = call({'operation': 'create_issue', 'owner': OWNER, 'repo': REPO,
+                         'title': '[pipeline] write-verification check'})
+    out = tool_output(body)
+    number = (out.get('issue') or {}).get('number')
+    check('created an issue for the write checks', bool(number), str(out.get('api_error')))
+    if not number:
+        return
+
+    status, body = call({'operation': 'add_assignees', 'owner': OWNER, 'repo': REPO,
+                         'issue_number': number,
+                         'assignees': ['definitely-not-a-real-user-zzz']})
+    out = tool_output(body)
+    error = out.get('api_error') or ''
+    check('a rejected assignee is reported rather than silently dropped',
+          'did not assign' in error, f"api_error={error!r}")
+    check('the error names the offending login',
+          'definitely-not-a-real-user-zzz' in error, error[:140])
+    check('the error points at list_assignable_users',
+          'list_assignable_users' in error, error[:140])
+
+    status, body = call({'operation': 'add_labels', 'owner': OWNER, 'repo': REPO,
+                         'issue_number': number, 'labels': ['kind/typo-not-real']})
+    out = tool_output(body)
+    error = out.get('api_error') or ''
+    check('an unknown label is rejected before writing',
+          'Unknown labels' in error, f"api_error={error!r}")
+    check('the rejection lists the valid names', 'bug' in error, error[:160])
+
+    # And the repository must be unchanged -- the point of validating first.
+    status, body = call({'operation': 'list_labels', 'owner': OWNER, 'repo': REPO})
+    out = tool_output(body)
+    names = [l['name'] for l in out.get('labels', [])]
+    check('the rejected label was not created on the repository',
+          'kind/typo-not-real' not in names, str(names))
+
+    # A real label still works, and a real assignee is accepted.
+    status, body = call({'operation': 'add_labels', 'owner': OWNER, 'repo': REPO,
+                         'issue_number': number, 'labels': ['bug']})
+    out = tool_output(body)
+    check('a valid label is still applied',
+          'bug' in ((out.get('issue') or {}).get('labels') or []),
+          str(out.get('api_error')))
+
+    if users:
+        status, body = call({'operation': 'add_assignees', 'owner': OWNER, 'repo': REPO,
+                             'issue_number': number, 'assignees': [users[0]]})
+        out = tool_output(body)
+        check('a valid assignee produces no error', out.get('api_error') is None,
+              str(out.get('api_error')))
+
+    # Opting out still allows create-on-write, for callers that want it.
+    status, body = call({'operation': 'add_labels', 'owner': OWNER, 'repo': REPO,
+                         'issue_number': number, 'labels': ['bug'],
+                         'validate_labels': False})
+    out = tool_output(body)
+    check('validate_labels=false skips validation', out.get('api_error') is None,
+          str(out.get('api_error')))
+
+    call({'operation': 'close_issue', 'owner': OWNER, 'repo': REPO,
+          'issue_number': number, 'state_reason': 'not_planned'})
+    print(f"     closed issue #{number}")
+
+
 def test_pull_requests():
     print("\n4. Pull requests")
 
@@ -736,6 +843,8 @@ def main():
         test_guards()
         test_list_pagination()
         test_pagination_no_gaps()
+        users = test_enumeration_and_metadata()
+        test_silent_failures_are_now_loud(users)
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

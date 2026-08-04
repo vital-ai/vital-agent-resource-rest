@@ -24,7 +24,9 @@ from vital_agent_resource_app.tools.github.github_issue_tool import (
     GitHubIssueTool, MAX_LIST_PAGES
 )
 from vital_agent_resource_app.tools.github.issue_models import (
-    GitHubIssueListInput, GitHubIssueCommentListInput, GitHubIssueSearchInput
+    GitHubIssueListInput, GitHubIssueCommentListInput, GitHubIssueSearchInput,
+    GitHubIssueListLabelsInput, GitHubIssueListMilestonesInput,
+    GitHubIssueListAssignableUsersInput
 )
 from vital_agent_resource_app.tools.github.github_pr_tool import GitHubPRTool
 from vital_agent_resource_app.tools.github.pr_models import (
@@ -40,6 +42,7 @@ from vital_agent_resource_app.tools.github.issue_models import (
     GITHUB_ISSUE_OPERATION_MODELS
 )
 from vital_agent_resource_app.tools.github.pr_models import GITHUB_PR_OPERATION_MODELS
+from vital_agent_resource_app.tools.github.repo_models import GITHUB_REPO_OPERATION_MODELS
 
 PASSED = []
 FAILED = []
@@ -256,6 +259,15 @@ async def test_every_list_operation():
         ('actions.list_run_jobs', GitHubActionsTool,
          GitHubActionsListJobsInput(operation='list_run_jobs', owner='o', repo='r',
                                     run_id=1, max_results=2), 'jobs'),
+        ('issue.list_labels', GitHubIssueTool,
+         GitHubIssueListLabelsInput(operation='list_labels', owner='o', repo='r',
+                                    max_results=2), None),
+        ('issue.list_milestones', GitHubIssueTool,
+         GitHubIssueListMilestonesInput(operation='list_milestones', owner='o', repo='r',
+                                        max_results=2), None),
+        ('issue.list_assignable_users', GitHubIssueTool,
+         GitHubIssueListAssignableUsersInput(operation='list_assignable_users',
+                                             owner='o', repo='r', max_results=2), None),
     ]
 
     handler_for = {
@@ -264,7 +276,9 @@ async def test_every_list_operation():
         'list_pr_files': '_list_pr_files', 'list_pr_comments': '_list_pr_comments',
         'list_pr_reviews': '_list_pr_reviews',
         'list_workflows': '_list_workflows', 'list_workflow_runs': '_list_runs',
-        'list_run_jobs': '_list_jobs',
+        'list_run_jobs': '_list_jobs', 'list_labels': '_list_labels',
+        'list_milestones': '_list_milestones',
+        'list_assignable_users': '_list_assignable_users',
     }
 
     # Structural check first. It is derived from the operation registries rather
@@ -277,6 +291,7 @@ async def test_every_list_operation():
         'issue': GITHUB_ISSUE_OPERATION_MODELS,
         'pr': GITHUB_PR_OPERATION_MODELS,
         'actions': GITHUB_ACTIONS_OPERATION_MODELS,
+        'repo': GITHUB_REPO_OPERATION_MODELS,
     }
     collection_ops = []
     for tool_name, registry in registries.items():

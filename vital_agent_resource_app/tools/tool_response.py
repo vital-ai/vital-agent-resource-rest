@@ -11,6 +11,7 @@ from vital_agent_resource_app.tools.serper_web_search.models import SerperWebSea
 from vital_agent_resource_app.tools.github.issue_models import GitHubIssueToolOutput
 from vital_agent_resource_app.tools.github.pr_models import GitHubPRToolOutput
 from vital_agent_resource_app.tools.github.actions_models import GitHubActionsToolOutput
+from vital_agent_resource_app.tools.github.repo_models import GitHubRepoToolOutput
 from vital_agent_resource_app.tools.send_email.models import EmailOutput
 
 
@@ -28,6 +29,7 @@ class ToolResponse(BaseModel):
         GitHubIssueToolOutput,
         GitHubPRToolOutput,
         GitHubActionsToolOutput,
+        GitHubRepoToolOutput,
         EmailOutput,
         dict
         ]] = Field(None, description="Tool-specific output data")
