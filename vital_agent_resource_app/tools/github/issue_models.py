@@ -221,6 +221,54 @@ class GitHubIssueListAssignableUsersInput(GitHubRepoBase):
     )
 
 
+class GitHubIssueFindByBodyInput(GitHubRepoBase):
+    """Scan issue bodies for a marker, page by page, until found or budget spent.
+
+    Distinct from search_issues because GitHub's search index lags creation by
+    roughly a minute, which makes it unusable as a duplicate check. This walks
+    the issues list directly, which is read-after-write consistent within a few
+    seconds.
+
+    Distinct from list_issues because the semantics differ: scan-until-found
+    rather than list-first-N, and the answer is only meaningful alongside
+    `complete` -- see the field description there.
+    """
+    operation: Literal["find_issues_by_body"] = Field(..., description="Operation to perform")
+    contains: str = Field(
+        ..., description="Marker text to look for in issue bodies", min_length=1)
+    match: Optional[Literal["substring", "line"]] = Field(
+        "line",
+        description="How `contains` must appear. 'line' matches only when some line of "
+                    "the body equals it exactly once stripped -- the right choice for "
+                    "line-anchored marker conventions, where a substring hit that is not "
+                    "a line hit is a false positive. 'substring' matches anywhere.")
+    state: Optional[Literal["open", "closed", "all"]] = Field(
+        "all",
+        description="Defaults to 'all', unlike list_issues: a closed duplicate is still "
+                    "a duplicate.")
+    labels: Optional[List[str]] = Field(None, description="Narrow the scan to these labels")
+    since: Optional[str] = Field(
+        None,
+        description="Only issues updated at or after this ISO 8601 timestamp. This "
+                    "filters on updated_at, NOT created_at, so it is unsafe as a "
+                    "duplicate-detection bound in either direction -- an old issue edited "
+                    "today is included, and a new issue is excluded if the bound is later "
+                    "than its last update. Use it to speed up polling, never to scope a "
+                    "duplicate check.")
+    include_pull_requests: Optional[bool] = Field(
+        False, description="GitHub returns pull requests from the issues endpoint")
+    max_pages: Optional[int] = Field(
+        5, description="Pages of 100 to scan before giving up", ge=1, le=20)
+    max_results: Optional[int] = Field(
+        10, description="Stop after this many matches", ge=1, le=100)
+    page: Optional[int] = Field(
+        None,
+        description="Page to start scanning from. When a scan returns complete=false it "
+                    "also returns next_page; passing that back resumes where the budget "
+                    "ran out rather than rescanning from the beginning.",
+        ge=1)
+
+
 class GitHubIssueSearchInput(GitHubRepoBase):
     """Search issues within one repository.
 
@@ -277,6 +325,7 @@ GitHubIssueToolInput = Union[
     GitHubIssueListLabelsInput,
     GitHubIssueListMilestonesInput,
     GitHubIssueListAssignableUsersInput,
+    GitHubIssueFindByBodyInput,
 ]
 
 # operation string -> input model, used by the resolver in tool_request.py
@@ -299,6 +348,7 @@ GITHUB_ISSUE_OPERATION_MODELS = {
     "list_labels": GitHubIssueListLabelsInput,
     "list_milestones": GitHubIssueListMilestonesInput,
     "list_assignable_users": GitHubIssueListAssignableUsersInput,
+    "find_issues_by_body": GitHubIssueFindByBodyInput,
 }
 
 
@@ -367,6 +417,14 @@ class GitHubIssueToolOutput(GitHubOutputBase):
     assignable_users: List[str] = Field(
         default_factory=list,
         description="Logins that can be assigned, from list_assignable_users")
+    scanned: Optional[int] = Field(
+        None, description="Issues examined by find_issues_by_body")
+    complete: Optional[bool] = Field(
+        None,
+        description="find_issues_by_body only. True when the scan reached the end of the "
+                    "matching issues, so an empty result establishes absence. False when "
+                    "the page budget ran out first -- absence is NOT established, and "
+                    "treating it as 'no duplicate' is what files the duplicate.")
     next_page: Optional[int] = Field(
         None,
         description="Page to request for the next batch, or null if there is no more. "

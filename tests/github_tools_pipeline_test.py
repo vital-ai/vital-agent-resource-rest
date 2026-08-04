@@ -635,11 +635,20 @@ def test_contents_and_refs(users):
           d.get('kind') == 'file' and bool(d.get('commit_sha')),
           f"api_error={out.get('api_error')} delete_result={d}")
 
-    status, body = call({'operation': 'get_file_contents', 'owner': OWNER, 'repo': REPO,
-                         'path': path, 'ref': branch}, tool='github_repo_tool')
-    out = tool_output(body)
-    check('the deleted file is gone', out.get('api_status_code') == 404,
-          str(out.get('api_error'))[:120])
+    # Contents reads lag writes, deletions included -- the same eventual
+    # consistency that makes create_or_update_file retry on a missing sha. Poll
+    # rather than asserting the delete is visible on the next call.
+    gone, out = False, {}
+    for _ in range(10):
+        status, body = call({'operation': 'get_file_contents', 'owner': OWNER, 'repo': REPO,
+                             'path': path, 'ref': branch}, tool='github_repo_tool')
+        out = tool_output(body)
+        if out.get('api_status_code') == 404:
+            gone = True
+            break
+        time.sleep(2)
+    check('the deleted file is gone', gone,
+          f"still readable after polling: {str(out.get('api_error'))[:100]}")
 
     # The split is the control: the read-only tool must not accept a write.
     status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
@@ -677,6 +686,78 @@ def test_contents_and_refs(users):
           str(out.get('api_error'))[:160])
     check('the default branch still exists',
           default_branch in names, str(names))
+
+
+def test_find_issues_by_body():
+    """The duplicate-detection primitive, against live data.
+
+    Chiefly here to prove the scan is read-after-write consistent where
+    search_issues is not: an issue created moments ago must be findable.
+    """
+    print("\n3g. find_issues_by_body")
+
+    marker = f"pipeline-marker: {int(time.time())}"
+
+    status, body = call({'operation': 'create_issue', 'owner': OWNER, 'repo': REPO,
+                         'title': '[pipeline] body scan target',
+                         'body': f"context line\n{marker}\ntrailing line"})
+    out = tool_output(body)
+    number = (out.get('issue') or {}).get('number')
+    check('created an issue carrying a marker', bool(number), str(out.get('api_error')))
+    if not number:
+        return
+
+    # The issues list is not instantly consistent -- the same lag list_issues has.
+    # The scan narrows the window against search_issues, it does not eliminate it,
+    # so poll and record how long it actually took. That number is what sizes
+    # PENDING_GRACE in the idempotency design.
+    started = time.time()
+    found, out, waited = [], {}, 0.0
+    for _ in range(20):
+        status, body = call({'operation': 'find_issues_by_body', 'owner': OWNER,
+                             'repo': REPO, 'contains': marker, 'max_pages': 3})
+        out = tool_output(body)
+        found = [i['number'] for i in out.get('issues', [])]
+        waited = time.time() - started
+        if number in found:
+            break
+        time.sleep(2)
+
+    check('the scan finds a newly created issue', number in found,
+          f"api_error={out.get('api_error')} found={found} "
+          f"complete={out.get('complete')} after {waited:.0f}s")
+    check('the scan reports what it examined', (out.get('scanned') or 0) > 0,
+          str(out.get('scanned')))
+    print(f"     issues-list visibility lag: ~{waited:.0f}s")
+
+    # A marker that does not exist, over a bounded scan of a repo with ~80 issues.
+    status, body = call({'operation': 'find_issues_by_body', 'owner': OWNER, 'repo': REPO,
+                         'contains': 'marker-that-does-not-exist-anywhere',
+                         'max_pages': 5})
+    out = tool_output(body)
+    check('a genuine absence reports complete=true with no matches',
+          out.get('complete') is True and not out.get('issues'),
+          f"complete={out.get('complete')} matches={len(out.get('issues', []))}")
+
+    # Budget of one page over a repo with more than 100 issues would be
+    # incomplete; with fewer it completes. Either way the pair must agree.
+    status, body = call({'operation': 'find_issues_by_body', 'owner': OWNER, 'repo': REPO,
+                         'contains': marker, 'max_pages': 1})
+    out = tool_output(body)
+    check('complete and next_page never disagree',
+          (out.get('complete') is True) == (out.get('next_page') is None),
+          f"complete={out.get('complete')} next_page={out.get('next_page')}")
+
+    # search_issues is the contrast: it may not see the new issue yet, and that
+    # is exactly why the scan exists. Not asserted -- just recorded.
+    status, body = call({'operation': 'search_issues', 'owner': OWNER, 'repo': REPO,
+                         'query': f'"{marker}"'})
+    searched = [i['number'] for i in tool_output(body).get('issues', [])]
+    print(f"     search_issues saw {searched or 'nothing yet'} (index lag is expected)")
+
+    call({'operation': 'close_issue', 'owner': OWNER, 'repo': REPO,
+          'issue_number': number, 'state_reason': 'not_planned'})
+    print(f"     closed issue #{number}")
 
 
 def test_pull_requests():
@@ -1046,6 +1127,7 @@ def main():
         users = test_enumeration_and_metadata()
         test_silent_failures_are_now_loud(users)
         test_contents_and_refs(users)
+        test_find_issues_by_body()
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

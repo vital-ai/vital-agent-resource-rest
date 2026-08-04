@@ -26,7 +26,7 @@ from vital_agent_resource_app.tools.github.github_issue_tool import (
 from vital_agent_resource_app.tools.github.issue_models import (
     GitHubIssueListInput, GitHubIssueCommentListInput, GitHubIssueSearchInput,
     GitHubIssueListLabelsInput, GitHubIssueListMilestonesInput,
-    GitHubIssueListAssignableUsersInput
+    GitHubIssueListAssignableUsersInput, GitHubIssueFindByBodyInput
 )
 from vital_agent_resource_app.tools.github.github_pr_tool import GitHubPRTool
 from vital_agent_resource_app.tools.github.pr_models import (
@@ -207,6 +207,101 @@ async def scenario(name, records, max_results):
           f"missed {missing}; expected {expected}, saw {seen}")
 
 
+class BodyClient(FakeClient):
+    """Serves issues whose bodies are scripted, for find_issues_by_body.
+
+    `bodies` is a list of body strings, one per issue, paged by per_page. A body
+    of None marks the record as a pull request.
+    """
+
+    def __init__(self, bodies, per_page_cap=100):
+        super().__init__('I' * len(bodies))
+        self.bodies = bodies
+        self.per_page_cap = per_page_cap
+
+    async def call(self, func, *args, context='', **kwargs):
+        page = kwargs.get('page', 1)
+        per_page = min(kwargs.get('per_page', 100), self.per_page_cap)
+        start = (page - 1) * per_page
+        window = self.bodies[start:start + per_page]
+        payload = []
+        for offset, body in enumerate(window):
+            number = start + offset + 1
+            item = {
+                'number': number, 'title': f"issue {number}", 'state': 'open',
+                'html_url': f"https://example.invalid/{number}",
+                'user': {'login': 'tester'}, 'labels': [], 'assignees': [],
+                'comments': 0, 'body': body,
+            }
+            if body is None:
+                item['pull_request'] = {'url': 'pr'}
+            payload.append(item)
+        return FakeResponse(payload, start + per_page < len(self.bodies))
+
+
+async def test_find_issues_by_body():
+    """The scan's contract: a false absence is what files the duplicate."""
+    print("\n5. find_issues_by_body")
+
+    MARK = "agent-key: abc123"
+
+    async def scan(bodies, per_page_cap=100, **overrides):
+        client = BodyClient(bodies, per_page_cap)
+        tool = GitHubIssueTool({}, client)
+        params = dict(operation='find_issues_by_body', owner='o', repo='r', contains=MARK)
+        params.update(overrides)
+        return await tool._find_issues_by_body(GitHubIssueFindByBodyInput(**params))
+
+    out = await scan([f"nothing here", f"prefix\n{MARK}\nsuffix", "also nothing"])
+    check('finds a marker on its own line',
+          [i.number for i in out.issues] == [2], str([i.number for i in out.issues]))
+    check('an exhausted scan reports complete=true', out.complete is True, str(out.complete))
+    check('scanned counts the issues examined', out.scanned == 3, str(out.scanned))
+
+    # line vs substring: the false-positive case the mode exists for
+    out = await scan([f"see {MARK} mentioned mid-sentence"])
+    check('line mode ignores a mid-sentence mention', not out.issues,
+          str([i.number for i in out.issues]))
+    out = await scan([f"see {MARK} mentioned mid-sentence"], match='substring')
+    check('substring mode catches it', len(out.issues) == 1, str(out.issues))
+
+    # The critical contract: budget exhausted means absence is NOT established.
+    out = await scan(["no marker"] * 500, per_page_cap=100, max_pages=2)
+    check('budget exhaustion reports complete=false', out.complete is False, str(out.complete))
+    check('budget exhaustion is not a bare no-match',
+          not out.issues and out.complete is False,
+          'an empty result with complete=true would assert a false absence')
+    check('an incomplete scan advertises where to resume', out.next_page is not None,
+          str(out.next_page))
+
+    out = await scan(["no marker"] * 150, per_page_cap=100, max_pages=5)
+    check('a scan that reaches the end reports complete=true and no match',
+          out.complete is True and not out.issues, f"complete={out.complete}")
+
+    # Bodies longer than the projection's truncation limit.
+    long_body = ("x" * 9000) + "\n" + MARK
+    out = await scan([long_body])
+    check('a marker beyond the body-truncation limit is still found',
+          len(out.issues) == 1,
+          'the scan read the truncated projection instead of the raw body')
+
+    # Pull requests are not issues.
+    out = await scan([None, f"{MARK}"])
+    check('pull requests are excluded from the scan',
+          [i.number for i in out.issues] == [2] and out.scanned == 1,
+          f"matches={[i.number for i in out.issues]} scanned={out.scanned}")
+
+    out = await scan([None, f"{MARK}"], include_pull_requests=True)
+    check('include_pull_requests=true scans them', out.scanned == 2, str(out.scanned))
+
+    out = await scan([f"{MARK}"] * 10, max_results=3)
+    check('max_results caps the matches', len(out.issues) == 3, str(len(out.issues)))
+
+    out = await scan([])
+    check('an empty repository is a complete scan with no matches',
+          out.complete is True and not out.issues, f"complete={out.complete}")
+
+
 class EnvelopeClient(FakeClient):
     """Serves a full page plus a next link, for operations whose payload is an
     envelope ({'total_count': N, '<key>': [...]}) rather than a bare list."""
@@ -238,53 +333,59 @@ async def test_every_list_operation():
     """
     print("\n4. truncated => next_page, across every list operation")
 
-    # (label, tool class, input, payload key for envelope responses)
+    # (label, tool class, input, payload key, record count)
+    # The record count is per case: most operations only need more records than
+    # max_results, but find_issues_by_body reads 100 at a time and only reports
+    # truncated when its *page* budget runs out, so it needs more than one page.
     cases = [
         ('issue.list_issues', GitHubIssueTool,
          GitHubIssueListInput(operation='list_issues', owner='o', repo='r',
-                              state='all', max_results=2), None),
+                              state='all', max_results=2), None, 6),
         ('issue.list_comments', GitHubIssueTool,
          GitHubIssueCommentListInput(operation='list_comments', owner='o', repo='r',
-                                     issue_number=1, max_results=2), None),
+                                     issue_number=1, max_results=2), None, 6),
         ('issue.search_issues', GitHubIssueTool,
          GitHubIssueSearchInput(operation='search_issues', owner='o', repo='r',
-                                query='x', max_results=2), 'items'),
+                                query='x', max_results=2), 'items', 6),
         ('pr.list_prs', GitHubPRTool,
          GitHubPRListInput(operation='list_prs', owner='o', repo='r',
-                           max_results=2), None),
+                           max_results=2), None, 6),
         ('pr.list_pr_files', GitHubPRTool,
          GitHubPRFilesInput(operation='list_pr_files', owner='o', repo='r',
-                            pr_number=1, max_results=2), None),
+                            pr_number=1, max_results=2), None, 6),
         ('pr.list_pr_comments', GitHubPRTool,
          GitHubPRCommentListInput(operation='list_pr_comments', owner='o', repo='r',
-                                  pr_number=1, max_results=2), None),
+                                  pr_number=1, max_results=2), None, 6),
         ('pr.list_pr_reviews', GitHubPRTool,
          GitHubPRReviewListInput(operation='list_pr_reviews', owner='o', repo='r',
-                                 pr_number=1, max_results=2), None),
+                                 pr_number=1, max_results=2), None, 6),
         ('actions.list_workflows', GitHubActionsTool,
          GitHubActionsListWorkflowsInput(operation='list_workflows', owner='o', repo='r',
-                                         max_results=2), 'workflows'),
+                                         max_results=2), 'workflows', 6),
         ('actions.list_workflow_runs', GitHubActionsTool,
          GitHubActionsListRunsInput(operation='list_workflow_runs', owner='o', repo='r',
-                                    max_results=2), 'workflow_runs'),
+                                    max_results=2), 'workflow_runs', 6),
         ('actions.list_run_jobs', GitHubActionsTool,
          GitHubActionsListJobsInput(operation='list_run_jobs', owner='o', repo='r',
-                                    run_id=1, max_results=2), 'jobs'),
+                                    run_id=1, max_results=2), 'jobs', 6),
         ('issue.list_labels', GitHubIssueTool,
          GitHubIssueListLabelsInput(operation='list_labels', owner='o', repo='r',
-                                    max_results=2), None),
+                                    max_results=2), None, 6),
         ('issue.list_milestones', GitHubIssueTool,
          GitHubIssueListMilestonesInput(operation='list_milestones', owner='o', repo='r',
-                                        max_results=2), None),
+                                        max_results=2), None, 6),
         ('issue.list_assignable_users', GitHubIssueTool,
          GitHubIssueListAssignableUsersInput(operation='list_assignable_users',
-                                             owner='o', repo='r', max_results=2), None),
+                                             owner='o', repo='r', max_results=2), None, 6),
+        ('issue.find_issues_by_body', GitHubIssueTool,
+         GitHubIssueFindByBodyInput(operation='find_issues_by_body', owner='o', repo='r',
+                                    contains='x', max_results=2, max_pages=1), None, 250),
         ('repo.list_branches', GitHubRepoTool,
          GitHubListBranchesInput(operation='list_branches', owner='o', repo='r',
-                                 max_results=2), None),
+                                 max_results=2), None, 6),
         ('repo.list_commits', GitHubRepoTool,
          GitHubListCommitsInput(operation='list_commits', owner='o', repo='r',
-                                max_results=2), None),
+                                max_results=2), None, 6),
     ]
 
     handler_for = {
@@ -297,6 +398,7 @@ async def test_every_list_operation():
         'list_milestones': '_list_milestones',
         'list_assignable_users': '_list_assignable_users',
         'list_branches': '_list_branches', 'list_commits': '_list_commits',
+        'find_issues_by_body': '_find_issues_by_body',
     }
 
     # Structural check first. It is derived from the operation registries rather
@@ -324,13 +426,13 @@ async def test_every_list_operation():
     # model missing the field dies there with an AttributeError instead of the
     # diagnostic above.
     check('every collection operation is exercised behaviourally too',
-          {c for c in collection_ops} == {label for label, _, _, _ in cases},
+          {c for c in collection_ops} == {label for label, _, _, _, _ in cases},
           f"registry says {sorted(collection_ops)}, table covers "
-          f"{sorted(label for label, _, _, _ in cases)}")
+          f"{sorted(label for label, _, _, _, _ in cases)}")
 
-    for label, tool_cls, vi, key in cases:
-        # 6 records at max_results=2 means more always remain.
-        client = EnvelopeClient(6, key)
+    for label, tool_cls, vi, key, records in cases:
+        # More records than the operation can return means more always remain.
+        client = EnvelopeClient(records, key)
         tool = tool_cls({}, client)
         out = await getattr(tool, handler_for[vi.operation])(vi)
 
@@ -427,6 +529,7 @@ async def main():
           len(client.requests) <= MAX_LIST_PAGES, f"made {len(client.requests)}")
 
     await test_every_list_operation()
+    await test_find_issues_by_body()
 
     print("\n" + "=" * 62)
     print(f"Passed: {len(PASSED)}   Failed: {len(FAILED)}")

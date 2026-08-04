@@ -16,7 +16,7 @@ from vital_agent_resource_app.tools.github.issue_models import (
     GitHubIssueCommentUpdateInput, GitHubIssueCommentDeleteInput,
     GitHubIssueAddLabelsInput, GitHubIssueRemoveLabelsInput,
     GitHubIssueAddAssigneesInput, GitHubIssueRemoveAssigneesInput,
-    GitHubIssueSearchInput, GitHubIssueListLabelsInput,
+    GitHubIssueSearchInput, GitHubIssueFindByBodyInput, GitHubIssueListLabelsInput,
     GitHubIssueListMilestonesInput, GitHubIssueListAssignableUsersInput,
     GitHubIssue, GitHubComment, GitHubLabel, GitHubMilestone, GitHubIssueToolOutput
 )
@@ -66,6 +66,7 @@ class GitHubIssueTool(AbstractTool):
             GitHubIssueAddAssigneesInput: self._add_assignees,
             GitHubIssueRemoveAssigneesInput: self._remove_assignees,
             GitHubIssueSearchInput: self._search_issues,
+            GitHubIssueFindByBodyInput: self._find_issues_by_body,
             GitHubIssueListLabelsInput: self._list_labels,
             GitHubIssueListMilestonesInput: self._list_milestones,
             GitHubIssueListAssignableUsersInput: self._list_assignable_users,
@@ -642,6 +643,107 @@ class GitHubIssueTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
+    async def _find_issues_by_body(
+            self, vi: GitHubIssueFindByBodyInput) -> GitHubIssueToolOutput:
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        max_results = vi.max_results or 10
+        max_pages = vi.max_pages or 5
+
+        kwargs: Dict[str, Any] = {
+            'state': vi.state or 'all',
+            'sort': 'created',
+            'direction': 'desc',
+            'per_page': 100,
+        }
+        if vi.labels:
+            kwargs['labels'] = ','.join(vi.labels)
+        since = _parse_since(vi.since)
+        if since:
+            kwargs['since'] = since
+
+        matches: List[GitHubIssue] = []
+        seen: set = set()
+        scanned = 0
+        page = vi.page or 1
+        complete = False
+        response = None
+
+        for _ in range(max_pages):
+            kwargs['page'] = page
+            response = await self.client.call(
+                self.client.gh.rest.issues.async_list_for_repo,
+                vi.owner, vi.repo,
+                context=f"find_issues_by_body {full_name} page={page}", **kwargs
+            )
+
+            raw = response.json() or []
+
+            for item in raw:
+                number = item.get('number')
+                # list_issues can hand back a page it already returned, so the
+                # same issue can arrive twice. Dedupe by number, not position.
+                if number in seen:
+                    continue
+                seen.add(number)
+
+                if not vi.include_pull_requests and 'pull_request' in item:
+                    continue
+
+                scanned += 1
+                # Match against the RAW body. _map_issue truncates at
+                # max_body_chars, so scanning the projection would silently miss
+                # a marker further down a long issue.
+                if self._body_matches(item.get('body'), vi.contains, vi.match or 'line'):
+                    mapped = self._map_issue(item)
+                    if mapped:
+                        matches.append(mapped)
+
+            if len(matches) >= max_results:
+                # Found enough. Absence is not in question, so `complete` is
+                # about the scan reaching the end, which it did not need to.
+                complete = True
+                break
+
+            if not has_next_page(response):
+                # Reached the end of the matching issues: an empty result here
+                # genuinely establishes absence.
+                complete = True
+                break
+
+            page += 1
+
+        if not complete:
+            logger.warning(
+                f"find_issues_by_body {full_name}: page budget ({max_pages}) exhausted "
+                f"after scanning {scanned} issues -- absence is NOT established"
+            )
+
+        return GitHubIssueToolOutput(
+            operation='find_issues_by_body',
+            repository=full_name,
+            issues=matches[:max_results],
+            returned_count=len(matches[:max_results]),
+            scanned=scanned,
+            complete=complete,
+            truncated=not complete,
+            next_page=None if complete else page + 1,
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    @staticmethod
+    def _body_matches(body: Optional[str], needle: str, mode: str) -> bool:
+        """Whether an issue body carries the marker.
+
+        'line' exists because marker conventions are line-anchored: a marker that
+        appears mid-sentence in someone's prose is a false positive, and a false
+        positive here suppresses a legitimate issue.
+        """
+        if not body:
+            return False
+        if mode == 'substring':
+            return needle in body
+        return any(line.strip() == needle for line in body.splitlines())
+
     async def _list_labels(self, vi: GitHubIssueListLabelsInput) -> GitHubIssueToolOutput:
         full_name = self.client.check_repo(vi.owner, vi.repo)
         max_results = vi.max_results or 100
@@ -835,6 +937,10 @@ class GitHubIssueTool(AbstractTool):
                 logger.info(f"  Labels: {output.issue.labels}")
             if output.issue.assignees:
                 logger.info(f"  Assignees: {output.issue.assignees}")
+
+        if output.scanned is not None:
+            logger.info(f"Scanned {output.scanned} issues, complete={output.complete}, "
+                        f"matches={len(output.issues)}")
 
         if output.issues:
             logger.info(f"Issues returned: {len(output.issues)} (truncated={output.truncated})")
