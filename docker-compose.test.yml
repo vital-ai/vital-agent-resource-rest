@@ -113,7 +113,12 @@ services:
     depends_on:
       app:
         condition: service_healthy
-    command: ["python", "tests/github_tools_pipeline_test.py"]
+    # The synthetic pagination suite runs first: it is offline and takes under a
+    # second, so a pagination regression fails the build before any GitHub call.
+    command:
+      - sh
+      - -c
+      - "python tests/github_pagination_test.py && python tests/github_tools_pipeline_test.py"
     networks:
       - varr_test
 

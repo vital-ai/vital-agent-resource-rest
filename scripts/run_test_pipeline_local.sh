@@ -66,9 +66,16 @@ if ! kill -0 "${SERVICE_PID}" 2>/dev/null; then
   exit 2
 fi
 
-TOOL_SERVICE_URL="http://localhost:${PORT}" \
-  "${PYTHON}" tests/github_tools_pipeline_test.py
+# Offline pagination suite first -- fast, and catches regressions the live
+# sandbox cannot produce.
+"${PYTHON}" tests/github_pagination_test.py
 status=$?
+
+if [ ${status} -eq 0 ]; then
+  TOOL_SERVICE_URL="http://localhost:${PORT}" \
+    "${PYTHON}" tests/github_tools_pipeline_test.py
+  status=$?
+fi
 
 echo ""
 if [ ${status} -eq 0 ]; then

@@ -189,11 +189,16 @@ class GitHubIssueTool(AbstractTool):
         # max_results real issues are collected or the pages run out.
         issues: List[GitHubIssue] = []
         page = vi.page or 1
+        # The page actually fetched last. Distinct from `page`, which runs one
+        # ahead when the loop ends by exhausting MAX_LIST_PAGES rather than
+        # breaking -- resuming from that would skip a page.
+        last_page = page
         more_available = False
         response = None
 
         for _ in range(MAX_LIST_PAGES):
             kwargs['page'] = page
+            last_page = page
             response = await self.client.call(
                 self.client.gh.rest.issues.async_list_for_repo,
                 vi.owner, vi.repo, context=f"list_issues {full_name} page={page}", **kwargs
@@ -222,9 +227,9 @@ class GitHubIssueTool(AbstractTool):
         issues = issues[:max_results]
 
         if discarded:
-            next_page = page
+            next_page = last_page
         elif more_available:
-            next_page = page + 1
+            next_page = last_page + 1
         else:
             next_page = None
 
