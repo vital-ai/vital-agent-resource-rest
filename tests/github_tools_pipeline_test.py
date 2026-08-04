@@ -297,9 +297,13 @@ def test_list_pagination():
         out2 = tool_output(body2)
         first_ids = {i['number'] for i in issues}
         second_ids = {i['number'] for i in out2.get('issues', [])}
-        check('following next_page returns no duplicates from the first batch',
-              not (first_ids & second_ids),
-              f"overlap={sorted(first_ids & second_ids)}")
+        # Overlap is permitted by design: next_page can point back at a
+        # partly-consumed page, because GitHub cannot resume mid-page and
+        # repeating a record is safer than skipping one. What must hold is
+        # progress -- the next batch has to contain something new.
+        check('following next_page makes progress',
+              bool(second_ids - first_ids),
+              f"second batch {sorted(second_ids)} added nothing to {sorted(first_ids)}")
 
     # Single-page operations report next_page on the same contract.
     status, body = call({'operation': 'list_comments', 'owner': OWNER, 'repo': REPO,
@@ -308,6 +312,65 @@ def test_list_pagination():
     check('single-page list_comments has a coherent next_page',
           out.get('next_page') is None or out.get('truncated') is True,
           f"truncated={out.get('truncated')} next_page={out.get('next_page')}")
+
+
+def test_pagination_no_gaps():
+    """Walking next_page must not skip anything.
+
+    Gaps and duplicates are the two failure modes of page-based pagination. The
+    duplicate check alone passes cleanly on a gap, which is the more dangerous
+    of the two -- a repeated issue is obvious, a missing one is invisible.
+    """
+    print("\n3c. Pagination completeness")
+
+    status, body = call({'operation': 'list_issues', 'owner': OWNER, 'repo': REPO,
+                         'state': 'all', 'max_results': 100})
+    out = tool_output(body)
+    expected = {i['number'] for i in out.get('issues', [])}
+    check('baseline listing returns issues to paginate over',
+          len(expected) > 2, f"only {len(expected)} issues in {OWNER}/{REPO}")
+    if len(expected) <= 2:
+        return
+
+    # Small pages force multi-page accumulation, which is where the slice can
+    # discard records the next request would otherwise skip past.
+    seen = set()
+    page = None
+    visited = []
+    for _ in range(40):
+        payload = {'operation': 'list_issues', 'owner': OWNER, 'repo': REPO,
+                   'state': 'all', 'max_results': 2}
+        if page is not None:
+            payload['page'] = page
+        status, body = call(payload)
+        out = tool_output(body)
+        if out.get('api_error'):
+            check('pagination walk stays error-free', False, str(out.get('api_error')))
+            return
+
+        seen |= {i['number'] for i in out.get('issues', [])}
+        visited.append(page or 1)
+
+        if not out.get('truncated'):
+            break
+
+        nxt = out.get('next_page')
+        check_once = nxt is not None
+        if not check_once:
+            check('truncated always advertises a next_page', False,
+                  f"truncated at page {page or 1} with next_page=None")
+            return
+        # next_page may point back at a partly-consumed page; that is intended.
+        # It must still make progress rather than repeating forever.
+        if len(visited) > 2 and visited[-1] == visited[-2] == nxt:
+            check('pagination makes progress', False, f"stuck repeating page {nxt}")
+            return
+        page = nxt
+
+    missing = expected - seen
+    check('walking next_page reaches every issue (no gaps)',
+          not missing, f"missed issues {sorted(missing)}")
+    check('the walk visited multiple pages', len(visited) > 1, str(visited))
 
 
 def test_pull_requests():
@@ -672,6 +735,7 @@ def main():
         number = test_write_lifecycle()
         test_guards()
         test_list_pagination()
+        test_pagination_no_gaps()
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

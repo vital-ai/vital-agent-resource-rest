@@ -210,14 +210,23 @@ class GitHubIssueTool(AbstractTool):
                 break
             page += 1
 
-        # More exist if GitHub advertised another page, or if this pass gathered
-        # more than the caller asked for.
-        truncated = more_available or len(issues) > max_results
+        # The slice below can discard issues that came from the page we stopped on.
+        # GitHub's pagination is page-only -- there is no offset -- so a mid-page
+        # resume is not expressible, and the choice is between handing back
+        # duplicates or silently skipping records. Duplicates win: a caller can
+        # dedupe by issue number, whereas a missing issue is invisible. So when
+        # anything is discarded, point next_page back at the page it came from
+        # rather than past it.
+        discarded = len(issues) > max_results
+        truncated = more_available or discarded
         issues = issues[:max_results]
 
-        # This operation may have consumed several pages, so the caller cannot
-        # infer the next page by incrementing their own. Report where to resume.
-        next_page = (page + 1) if more_available else None
+        if discarded:
+            next_page = page
+        elif more_available:
+            next_page = page + 1
+        else:
+            next_page = None
 
         return GitHubIssueToolOutput(
             operation='list_issues',
@@ -470,38 +479,48 @@ class GitHubIssueTool(AbstractTool):
         # The refresh is a further API call, so it can fail for the same reason the
         # loop did (rate limit, timeout). Letting it raise would discard the
         # partial-state report -- exactly the case this tracking exists for.
+        refresh_error: Optional[GitHubToolError] = None
         try:
             result = await self._issue_result(
                 'remove_labels', full_name, vi.owner, vi.repo, vi.issue_number
             )
-        except GitHubToolError as refresh_error:
+        except GitHubToolError as e:
+            # The refresh is a further API call, so it can fail for the same reason
+            # the loop did. Letting it raise would discard the partial-state report
+            # -- exactly the case this tracking exists for.
             logger.warning(
-                f"remove_labels refresh failed for {full_name}#{vi.issue_number}: "
-                f"{refresh_error.message}"
+                f"remove_labels refresh failed for {full_name}#{vi.issue_number}: {e.message}"
             )
+            refresh_error = e
             result = GitHubIssueToolOutput(
                 operation='remove_labels',
-                repository=full_name,
-                api_error=(
-                    f"Labels were changed but the issue could not be re-read, so the "
-                    f"current label set is unknown. {refresh_error.message}"
-                ),
-                api_status_code=refresh_error.status_code
+                repository=full_name
             )
-            if failure is None:
-                failure = refresh_error
 
         if failure is not None:
+            # A label removal failed. Report exactly how far the loop got.
             not_attempted = [l for l in vi.labels
                              if l not in removed and l not in skipped and l != failed_label]
-            existing = f" {result.api_error}" if result.api_error else ""
+            labels_note = (
+                "The issue's current labels are in this response."
+                if result.issue else
+                "The issue could not be re-read, so its current labels are unknown."
+            )
             result.api_error = (
                 f"Partially applied: removed {removed or 'nothing'}; "
                 f"failed on {failed_label!r}; not attempted: {not_attempted or 'none'}. "
-                f"{'The issue-s current labels are in this response.' if result.issue else ''}"
-                f" {failure.message}{existing}"
-            ).replace('issue-s', "issue's")
+                f"{labels_note} {failure.message}"
+            )
             result.api_status_code = failure.status_code
+        elif refresh_error is not None:
+            # Every label came off; only the read-back failed. Saying "partially
+            # applied" here would be wrong.
+            result.api_error = (
+                f"All requested labels were removed ({removed or 'none needed'}), but the "
+                f"issue could not be re-read, so its current label set is unknown. "
+                f"{refresh_error.message}"
+            )
+            result.api_status_code = refresh_error.status_code
 
         return result
 

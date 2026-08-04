@@ -326,6 +326,52 @@ async def test_error_mapping():
           'primary rate limit' in msg, msg[:100])
 
 
+async def test_remove_labels_refresh_failure(number):
+    """A failed read-back must not be reported as a failed removal."""
+    print("\n4d. remove_labels refresh failure")
+
+    if not number:
+        check('remove_labels refresh test had an issue to use', False, 'no issue number')
+        return
+
+    tool = build_tool()
+    await run(tool, GitHubIssueAddLabelsInput(
+        operation='add_labels', owner=OWNER, repo=REPO, issue_number=number, labels=['bug']))
+
+    # Break only the read-back, leaving the removal calls working.
+    from vital_agent_resource_app.tools.github.github_client import GitHubToolError
+    original = tool._issue_result
+
+    async def failing_refresh(*args, **kwargs):
+        raise GitHubToolError('simulated refresh failure', status_code=403)
+
+    tool._issue_result = failing_refresh
+    try:
+        out = await run(tool, GitHubIssueRemoveLabelsInput(
+            operation='remove_labels', owner=OWNER, repo=REPO,
+            issue_number=number, labels=['bug']))
+    finally:
+        tool._issue_result = original
+
+    error = out.get('api_error') or ''
+    check('refresh-only failure is not reported as "partially applied"',
+          'Partially applied' not in error, error[:140])
+    check('refresh-only failure says the labels were removed',
+          'were removed' in error, error[:140])
+    check('refresh-only failure does not invent a failed label',
+          'failed on None' not in error, error[:140])
+    check('refresh-only failure says the label set is unknown',
+          'unknown' in error, error[:140])
+    check('the refresh error appears once, not twice',
+          error.count('simulated refresh failure') == 1, error[:200])
+
+    # Leave the issue as we found it.
+    tool2 = build_tool()
+    await run(tool2, GitHubIssueRemoveLabelsInput(
+        operation='remove_labels', owner=OWNER, repo=REPO,
+        issue_number=number, labels=['bug']))
+
+
 async def test_timeout_branch():
     """Timeouts must produce the mutation warning, not the generic error.
 
@@ -409,6 +455,7 @@ async def main():
         await test_list_and_search(tool, number)
         await test_guards()
         await test_error_mapping()
+        await test_remove_labels_refresh_failure(number)
         await test_timeout_branch()
         await test_validation()
     finally:

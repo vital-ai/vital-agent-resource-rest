@@ -24,10 +24,13 @@ class GitHubOutputBase(BaseModel):
     truncated: bool = Field(False, description="True if more results existed than were returned")
     next_page: Optional[int] = Field(
         None,
-        description="Page number to request for the next batch, or null if there is no "
-                    "more. Use this rather than incrementing `page` yourself: some "
-                    "operations consume several pages internally, so the next unseen "
-                    "page is not always page+1."
+        description="Page to request for the next batch, or null if there is no more. "
+                    "Use this rather than incrementing `page` yourself: some operations "
+                    "consume several pages internally, so the next page is not always "
+                    "page+1. It can also point back at the page just read, when that "
+                    "page was only partly consumed -- GitHub paginates by page with no "
+                    "offset, so resuming mid-page is impossible and this errs toward "
+                    "repeating records rather than skipping them. Deduplicate by id."
     )
     api_error: Optional[str] = Field(None, description="Error message if the GitHub API call failed")
     api_status_code: Optional[int] = Field(None, description="GitHub API status code if the call failed")

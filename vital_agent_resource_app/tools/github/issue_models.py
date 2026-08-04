@@ -28,7 +28,9 @@ class GitHubIssueListInput(GitHubRepoBase):
         None,
         description="Page to start from. This operation may consume several pages to fill "
                     "max_results after filtering out pull requests, so do not assume the "
-                    "next batch is page+1 -- pass the next_page value from the response.",
+                    "next batch is page+1 -- pass the next_page value from the response, "
+                    "which may repeat a partly-consumed page and can therefore return "
+                    "records you have already seen.",
         ge=1
     )
 
