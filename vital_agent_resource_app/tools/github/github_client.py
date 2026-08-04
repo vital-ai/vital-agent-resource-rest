@@ -91,6 +91,14 @@ class GitHubClient:
         # High-impact operations stay opt-in.
         self.allow_pr_merge = _as_bool(config.get('allow_pr_merge'), False)
         self.allow_workflow_dispatch = _as_bool(config.get('allow_workflow_dispatch'), False)
+        # Writing repository content is a different authority from filing an
+        # issue, so it does not ride on allow_writes.
+        self.allow_content_writes = _as_bool(config.get('allow_content_writes'), False)
+        # Even with content writes enabled, committing straight to the default
+        # branch is opt-in again: the intended flow is create_branch -> write ->
+        # create_pr, so a human reviews before anything lands on main.
+        self.allow_default_branch_writes = _as_bool(
+            config.get('allow_default_branch_writes'), False)
 
         self.allowed_repos: Set[str] = self._parse_allowed_repos(config.get('allowed_repos'))
 
@@ -99,7 +107,9 @@ class GitHubClient:
                 f"GitHub client initialized (token ...{str(pat)[-4:]}, "
                 f"allowed_repos={sorted(self.allowed_repos) or 'NONE - all requests will be denied'}, "
                 f"allow_writes={self.allow_writes}, allow_pr_merge={self.allow_pr_merge}, "
-                f"allow_workflow_dispatch={self.allow_workflow_dispatch})"
+                f"allow_workflow_dispatch={self.allow_workflow_dispatch}, "
+                f"allow_content_writes={self.allow_content_writes}, "
+                f"allow_default_branch_writes={self.allow_default_branch_writes})"
             )
 
         # githubkit passes timeout=None to httpx, which means wait forever --
@@ -202,6 +212,27 @@ class GitHubClient:
             raise GitHubToolError(
                 f"Workflow dispatch is disabled "
                 f"({{ENV}}__TOOL__GITHUB__ALLOW_WORKFLOW_DISPATCH=false); '{operation}' was rejected."
+            )
+
+        if gate == 'allow_content_writes' and not self.allow_content_writes:
+            raise GitHubToolError(
+                f"Writing repository content is disabled "
+                f"({{ENV}}__TOOL__GITHUB__ALLOW_CONTENT_WRITES=false); '{operation}' was "
+                f"rejected. This gate is separate from ALLOW_WRITES because committing "
+                f"code is a different authority from filing an issue."
+            )
+
+    def check_default_branch_write(self, branch: str, default_branch: str, full_name: str) -> None:
+        """Refuse a commit straight to the default branch unless opted in.
+
+        The intended flow is create_branch -> create_or_update_file -> create_pr,
+        so changes are reviewed. Writing to the default branch bypasses that.
+        """
+        if branch == default_branch and not self.allow_default_branch_writes:
+            raise GitHubToolError(
+                f"Refusing to commit directly to the default branch '{branch}' on "
+                f"{full_name}: {{ENV}}__TOOL__GITHUB__ALLOW_DEFAULT_BRANCH_WRITES is false. "
+                f"Create a branch and open a pull request instead."
             )
 
     @staticmethod

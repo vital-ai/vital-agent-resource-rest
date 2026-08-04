@@ -480,6 +480,117 @@ def test_silent_failures_are_now_loud(users):
     print(f"     closed issue #{number}")
 
 
+def test_contents_and_refs():
+    """Phase B: reads, branch creation, content writes, and both new gates.
+
+    Also the end-to-end flow the tools could not previously do at all --
+    create_branch -> write file -> open PR, with no raw PAT fixture.
+    """
+    print("\n3f. Contents and refs")
+
+    status, body = call({'operation': 'get_repo', 'owner': OWNER, 'repo': REPO},
+                        tool='github_repo_tool')
+    default_branch = ((tool_output(body).get('repository_info')) or {}).get('default_branch')
+    check('default branch is known', bool(default_branch), str(default_branch))
+
+    status, body = call({'operation': 'get_file_contents', 'owner': OWNER, 'repo': REPO,
+                         'path': 'README.md'}, tool='github_repo_tool')
+    out = tool_output(body)
+    f = out.get('file') or {}
+    check('get_file_contents reads a file',
+          f.get('content') is not None and not f.get('is_binary'),
+          f"api_error={out.get('api_error')} file={ {k: f.get(k) for k in ('type','size','is_binary')} }")
+    check('get_file_contents returns a blob sha', bool(f.get('sha')), str(f.get('sha')))
+
+    status, body = call({'operation': 'get_file_contents', 'owner': OWNER, 'repo': REPO,
+                         'path': ''}, expect_status=422, tool='github_repo_tool')
+    check('an empty path is rejected by validation', status == 422, f"status={status}")
+
+    status, body = call({'operation': 'list_branches', 'owner': OWNER, 'repo': REPO},
+                        tool='github_repo_tool')
+    out = tool_output(body)
+    names = [b['name'] for b in out.get('branches', [])]
+    check('list_branches includes the default branch', default_branch in names, str(names))
+    check('the default branch is flagged',
+          any(b['name'] == default_branch and b['is_default']
+              for b in out.get('branches', [])), str(out.get('branches')))
+
+    status, body = call({'operation': 'list_commits', 'owner': OWNER, 'repo': REPO,
+                         'max_results': 5}, tool='github_repo_tool')
+    out = tool_output(body)
+    check('list_commits returns commits', len(out.get('commits', [])) > 0,
+          str(out.get('api_error')))
+
+    # --- the gate that matters most: no committing to the default branch ---
+    status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
+                         'path': 'should-never-exist.md', 'content': 'nope',
+                         'message': 'should be refused', 'branch': default_branch},
+                        tool='github_repo_tool')
+    out = tool_output(body)
+    error = out.get('api_error') or ''
+    check('committing to the default branch is refused',
+          'default branch' in error and 'ALLOW_DEFAULT_BRANCH_WRITES' in error, error[:160])
+
+    # --- create_branch -> write -> PR, entirely through the tools ---
+    branch = f"tool-flow-{int(time.time())}"
+    status, body = call({'operation': 'create_branch', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch}, tool='github_repo_tool')
+    out = tool_output(body)
+    check('create_branch succeeds', (out.get('branch') or {}).get('name') == branch,
+          str(out.get('api_error')))
+
+    path = f"pipeline/{branch}.md"
+    status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
+                         'path': path, 'content': 'created by the pipeline test\n',
+                         'message': 'pipeline: add a file', 'branch': branch},
+                        tool='github_repo_tool')
+    out = tool_output(body)
+    w = out.get('write_result') or {}
+    check('create_or_update_file creates a file', w.get('created') is True,
+          f"api_error={out.get('api_error')} write_result={w}")
+    check('the write reports a commit sha', bool(w.get('commit_sha')), str(w))
+
+    # Updating the same path must resolve the blob sha itself.
+    status, body = call({'operation': 'create_or_update_file', 'owner': OWNER, 'repo': REPO,
+                         'path': path, 'content': 'updated by the pipeline test\n',
+                         'message': 'pipeline: update the file', 'branch': branch},
+                        tool='github_repo_tool')
+    out = tool_output(body)
+    w = out.get('write_result') or {}
+    check('updating an existing file resolves its sha automatically',
+          w.get('created') is False and bool(w.get('commit_sha')),
+          f"api_error={out.get('api_error')} write_result={w}")
+
+    status, body = call({'operation': 'compare_refs', 'owner': OWNER, 'repo': REPO,
+                         'base': default_branch, 'head': branch}, tool='github_repo_tool')
+    out = tool_output(body)
+    comp = out.get('comparison') or {}
+    check('compare_refs reports the branch is ahead',
+          comp.get('status') == 'ahead' and (comp.get('ahead_by') or 0) >= 1, str(comp))
+    check('compare_refs lists the changed file',
+          any(f.get('filename') == path for f in out.get('files', [])),
+          str(out.get('files')))
+
+    # The whole point: create_pr is now reachable from a standing start.
+    status, body = call({'operation': 'create_pr', 'owner': OWNER, 'repo': REPO,
+                         'title': '[pipeline] opened without a PAT fixture',
+                         'head': branch, 'base': default_branch,
+                         'body': 'Branch and commit were both made through the tools.'},
+                        tool='github_pr_tool')
+    out = tool_output(body)
+    pr_number = (out.get('pull_request') or {}).get('number')
+    check('create_pr is reachable using only tool operations', bool(pr_number),
+          str(out.get('api_error')))
+
+    if pr_number:
+        call({'operation': 'update_pr', 'owner': OWNER, 'repo': REPO,
+              'pr_number': pr_number, 'state': 'closed'}, tool='github_pr_tool')
+        print(f"     closed PR #{pr_number}")
+
+    delete_test_branch(branch)
+    print(f"     deleted branch {branch}")
+
+
 def test_pull_requests():
     print("\n4. Pull requests")
 
@@ -845,6 +956,7 @@ def main():
         test_pagination_no_gaps()
         users = test_enumeration_and_metadata()
         test_silent_failures_are_now_loud(users)
+        test_contents_and_refs()
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

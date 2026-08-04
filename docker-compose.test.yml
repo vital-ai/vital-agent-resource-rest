@@ -79,6 +79,10 @@ services:
       # trigger CI even if a future test asks it to.
       - DEV__TOOL__GITHUB__ALLOW_PR_MERGE=false
       - DEV__TOOL__GITHUB__ALLOW_WORKFLOW_DISPATCH=false
+      # Content writes on, default-branch writes off: the pipeline exercises the
+      # create_branch -> write -> PR flow and must not be able to commit to main.
+      - DEV__TOOL__GITHUB__ALLOW_CONTENT_WRITES=true
+      - DEV__TOOL__GITHUB__ALLOW_DEFAULT_BRANCH_WRITES=false
       # No RunPod cluster in the test stack; keeps startup noise down.
       - DEV__RUNPOD__API_KEY=
     healthcheck:

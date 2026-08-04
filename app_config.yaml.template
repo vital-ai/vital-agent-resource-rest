@@ -19,6 +19,8 @@ vital_agent_resource_app:
       allow_writes: "true"
       allow_pr_merge: "false"
       allow_workflow_dispatch: "false"
+      allow_content_writes: "false"
+      allow_default_branch_writes: "false"
     - tool_id: "send_email_tool"
       api_key: "your_mailgun_api_key_here"
       domain: "your_mailgun_domain_here"

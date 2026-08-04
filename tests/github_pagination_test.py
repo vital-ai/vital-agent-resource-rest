@@ -42,7 +42,10 @@ from vital_agent_resource_app.tools.github.issue_models import (
     GITHUB_ISSUE_OPERATION_MODELS
 )
 from vital_agent_resource_app.tools.github.pr_models import GITHUB_PR_OPERATION_MODELS
-from vital_agent_resource_app.tools.github.repo_models import GITHUB_REPO_OPERATION_MODELS
+from vital_agent_resource_app.tools.github.repo_models import (
+    GITHUB_REPO_OPERATION_MODELS, GitHubListBranchesInput, GitHubListCommitsInput
+)
+from vital_agent_resource_app.tools.github.github_repo_tool import GitHubRepoTool
 
 PASSED = []
 FAILED = []
@@ -105,6 +108,11 @@ class FakeClient:
         return f"repo:{full_name} {query}".strip()
 
     async def call(self, func, *args, context='', **kwargs):
+        # list_branches resolves the repository's default branch first, which is
+        # an object response rather than a page of records.
+        if 'default branch' in context:
+            return FakeResponse({'default_branch': 'main'}, False)
+
         page = kwargs.get('page', 1)
         per_page = kwargs.get('per_page', 30)
         self.requests.append(page)
@@ -208,7 +216,10 @@ class EnvelopeClient(FakeClient):
         self.key = key
 
     async def call(self, func, *args, context='', **kwargs):
-        response = await super().call(func, *args, **kwargs)
+        # Forward context: FakeClient keys some responses off it.
+        response = await super().call(func, *args, context=context, **kwargs)
+        if not isinstance(response._records, list):
+            return response
         if self.key:
             response._records = {
                 'total_count': len(self.records),
@@ -268,6 +279,12 @@ async def test_every_list_operation():
         ('issue.list_assignable_users', GitHubIssueTool,
          GitHubIssueListAssignableUsersInput(operation='list_assignable_users',
                                              owner='o', repo='r', max_results=2), None),
+        ('repo.list_branches', GitHubRepoTool,
+         GitHubListBranchesInput(operation='list_branches', owner='o', repo='r',
+                                 max_results=2), None),
+        ('repo.list_commits', GitHubRepoTool,
+         GitHubListCommitsInput(operation='list_commits', owner='o', repo='r',
+                                max_results=2), None),
     ]
 
     handler_for = {
@@ -279,6 +296,7 @@ async def test_every_list_operation():
         'list_run_jobs': '_list_jobs', 'list_labels': '_list_labels',
         'list_milestones': '_list_milestones',
         'list_assignable_users': '_list_assignable_users',
+        'list_branches': '_list_branches', 'list_commits': '_list_commits',
     }
 
     # Structural check first. It is derived from the operation registries rather
