@@ -9,15 +9,16 @@ same MemoryDB cluster. Two things about that cluster drive this module:
     bug rather than a configuration error.
   - MemoryDB is TLS-only, hence rediss:// and ssl=True.
 
-Config differs from the bridge: this service reads {ENV}__TOOL__GITHUB__MEMORYDB_*
-through EnvConfigLoader's per-tool prefix scan, so no shared config change is
-needed to add it.
+Configured as a **global service**, not per tool: {ENV}__MEMORYDB__* defines the
+connection once, and any tool opts in separately with its own policy. A tool
+config therefore never carries connection details -- adding a second consumer
+means adding a flag to that tool, not another copy of the URL.
 
 Usage:
     from vital_agent_resource_app.services.redis_client import get_redis
 
     r = get_redis()
-    if r is not None:
+    if r is not None:            # None means the service is not configured
         await r.ping()
 """
 
@@ -41,7 +42,7 @@ def _as_bool(value: Any, default: bool = True) -> bool:
 
 
 def init_redis(config: Optional[Dict[str, Any]]) -> Optional[aioredis.RedisCluster]:
-    """Build the global RedisCluster client from a tool config block.
+    """Build the global RedisCluster client from the shared memorydb config.
 
     Returns None when no URL is configured, which is the normal state for a
     deployment that does not use idempotency. Does not connect -- redis-py
@@ -50,7 +51,7 @@ def init_redis(config: Optional[Dict[str, Any]]) -> Optional[aioredis.RedisClust
     """
     global _client
 
-    url = (config or {}).get('memorydb_url')
+    url = (config or {}).get('url')
     if not url:
         logger.info("MemoryDB: no URL configured; idempotency features are unavailable")
         _client = None
@@ -62,8 +63,8 @@ def init_redis(config: Optional[Dict[str, Any]]) -> Optional[aioredis.RedisClust
         port=parsed.port or 6379,
         username=parsed.username or "default",
         password=parsed.password,
-        ssl=_as_bool((config or {}).get('memorydb_ssl'), True),
-        ssl_cert_reqs=(config or {}).get('memorydb_ssl_cert_reqs') or "none",
+        ssl=_as_bool((config or {}).get('ssl'), True),
+        ssl_cert_reqs=(config or {}).get('ssl_cert_reqs') or "none",
         decode_responses=True,
     )
     logger.info(

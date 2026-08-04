@@ -102,6 +102,7 @@ from vital_agent_resource_app.tools.serper_web_search import models as serper_we
 from vital_agent_resource_app.tools.send_message import models as loop_lookup_models
 from vital_agent_resource_app.utils.env_config import EnvConfigLoader
 import functools
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 # Create and populate tool registry
@@ -247,7 +248,31 @@ tool_registry.add_tool(
     tool_instance=SendEmailTool(send_email_config)
 )
 
-app = FastAPI()
+# --- Shared MemoryDB service -------------------------------------------------
+# Global, not tool-scoped: the connection is configured once under
+# {ENV}__MEMORYDB__* and any tool opts in. Connecting needs an await, so it
+# happens in lifespan rather than at import time like everything else here.
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from vital_agent_resource_app.services import redis_client
+
+    cfg = config.get('vital_agent_resource_app', {}).get('memorydb', {})
+    redis_client.init_redis(cfg)
+    if cfg.get('url'):
+        # Report reachability at startup rather than letting the first request
+        # discover it. Never fatal: tools that do not use the service must keep
+        # working, and those that do decide their own fail-open/closed policy.
+        reachable = await redis_client.ping()
+        logger.info(f"MemoryDB: {'PING OK' if reachable else 'UNREACHABLE - '
+                    'features depending on it will report a degraded guard'}")
+
+    try:
+        yield
+    finally:
+        await redis_client.close_redis()
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Add JWT authentication middleware
 app.add_middleware(JWTAuthenticationMiddleware)

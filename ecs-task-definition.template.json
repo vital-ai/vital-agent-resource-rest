@@ -1,7 +1,9 @@
 {
   "family": "vital-agent-resource-rest-prod",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "1024",
   "memory": "2048",
   "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/YOUR_APP-production-ECSTaskExecutionRole",
@@ -98,6 +100,18 @@
         {
           "name": "PROD__TOOL__GITHUB__ALLOW_WORKFLOW_DISPATCH",
           "value": "false"
+        },
+        {
+          "name": "PROD__MEMORYDB__SSL",
+          "value": "true"
+        },
+        {
+          "name": "PROD__MEMORYDB__SSL_CERT_REQS",
+          "value": "none"
+        },
+        {
+          "name": "PROD__TOOL__GITHUB__IDEMPOTENCY_ENABLED",
+          "value": "false"
         }
       ],
       "secrets": [
@@ -144,6 +158,10 @@
         {
           "name": "PROD__APP__CORS_ORIGINS",
           "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__APP__CORS_ORIGINS::"
+        },
+        {
+          "name": "PROD__MEMORYDB__URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:SECRET_NAME:PROD__MEMORYDB__URL::"
         }
       ],
       "logConfiguration": {

@@ -19,6 +19,7 @@ class EnvConfigLoader:
         DEV__TOOL__LOOP_LOOKUP__API_KEY → tools[loop_lookup_tool]['api_key']
         DEV__TOOL__LOOP_MESSAGE__AUTHORIZATION_KEY → tools[loop_message_tool]['authorization_key']
         DEV__RUNPOD__API_KEY → runpod['runpod_api_key']
+        DEV__MEMORYDB__URL → memorydb['url']
         DEV__JWT__ENABLED → jwt config (handled separately)
     """
     
@@ -137,6 +138,21 @@ class EnvConfigLoader:
         return config if len(config) > 1 else None
     
     @staticmethod
+    def get_memorydb_config() -> Dict[str, Any]:
+        """Connection config for the shared MemoryDB service.
+
+        A global service rather than a tool: the connection is defined once and
+        any tool may opt into using it. Returns {} when unconfigured.
+        """
+        env = EnvConfigLoader.get_env()
+        prefix = f"{env}__MEMORYDB__"
+        config = {}
+        for key, value in os.environ.items():
+            if key.startswith(prefix):
+                config[key[len(prefix):].lower()] = value
+        return config
+
+    @staticmethod
     def _get_all_tool_configs() -> List[Dict[str, Any]]:
         """
         Scan environment and build list of all tool configurations
@@ -201,6 +217,9 @@ class EnvConfigLoader:
                     ],
                     'runpod': {
                         'runpod_api_key': 'xxx'
+                    },
+                    'memorydb': {
+                        'url': 'rediss://...', 'ssl': 'true'
                     }
                 }
             }
@@ -216,6 +235,7 @@ class EnvConfigLoader:
         env_prefix = f"{env}__"
         tool_configs = {}  # tool_name -> config dict
         runpod_config = {}
+        memorydb_config = {}
         
         for key, value in os.environ.items():
             if not key.startswith(env_prefix):
@@ -247,6 +267,14 @@ class EnvConfigLoader:
                 if len(parts) >= 2:
                     config_key = '__'.join(parts[1:])
                     runpod_config[config_key.lower()] = value
+
+            elif section == 'MEMORYDB':
+                # Format: DEV__MEMORYDB__CONFIG_KEY
+                # A shared service, not a tool: any tool may use it, and the
+                # connection is configured once rather than per consumer.
+                if len(parts) >= 2:
+                    config_key = '__'.join(parts[1:])
+                    memorydb_config[config_key.lower()] = value
         
         # Convert tool_configs dict to list format with tool_id
         tools = []
@@ -260,7 +288,8 @@ class EnvConfigLoader:
         config = {
             'vital_agent_resource_app': {
                 'tools': tools,
-                'runpod': runpod_config
+                'runpod': runpod_config,
+                'memorydb': memorydb_config
             }
         }
         
@@ -268,6 +297,8 @@ class EnvConfigLoader:
         EnvConfigLoader._config_cache = config
         
         logger.info(f"Loaded configuration for {len(tools)} tools")
+        if memorydb_config.get('url'):
+            logger.info("MemoryDB: shared service configured")
         if tools:
             logger.debug(f"Tools loaded: {[t['tool_id'] for t in tools]}")
         
