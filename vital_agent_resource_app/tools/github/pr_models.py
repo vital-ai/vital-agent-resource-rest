@@ -251,6 +251,12 @@ class GitHubPRToolOutput(GitHubOutputBase):
     comments: List[GitHubPRComment] = Field(default_factory=list, description="Conversation comments")
     comment: Optional[GitHubPRComment] = Field(None, description="Newly created comment")
     merge_result: Optional[GitHubPRMergeResult] = Field(None, description="Outcome of a merge")
+    next_page: Optional[int] = Field(
+        None,
+        description="Page to request for the next batch, or null if there is no more. "
+                    "Every list operation on this tool reads exactly one page, so this "
+                    "is the next page and results never repeat."
+    )
     total_count: Optional[int] = Field(
         None,
         description="Corpus total reported by GitHub, set only where GitHub supplies one. "

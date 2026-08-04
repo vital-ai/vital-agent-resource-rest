@@ -290,6 +290,18 @@ class GitHubIssueToolOutput(GitHubOutputBase):
     comments: List[GitHubComment] = Field(default_factory=list, description="Comments from list operations")
     comment: Optional[GitHubComment] = Field(None, description="Comment from single-comment operations")
     deleted_id: Optional[int] = Field(None, description="Id of a deleted resource")
+    next_page: Optional[int] = Field(
+        None,
+        description="Page to request for the next batch, or null if there is no more. "
+                    "Always use this rather than incrementing `page` yourself. For "
+                    "list_comments and search_issues it is simply the next page. For "
+                    "list_issues it may skip ahead (several pages can be consumed to "
+                    "fill max_results after filtering out pull requests) or point back "
+                    "at the page just read, when that page was only partly consumed -- "
+                    "GitHub paginates by page with no offset, so resuming mid-page is "
+                    "impossible and this errs toward repeating records rather than "
+                    "skipping them. Deduplicate list_issues results by issue number."
+    )
     total_count: Optional[int] = Field(
         None,
         description="Corpus total reported by GitHub for the query, set only where GitHub "

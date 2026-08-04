@@ -203,6 +203,12 @@ class GitHubActionsToolOutput(GitHubOutputBase):
     jobs: List[GitHubWorkflowJob] = Field(default_factory=list, description="Jobs in a run")
     logs: List[GitHubRunLog] = Field(default_factory=list, description="Truncated log files")
     triggered: Optional[bool] = Field(None, description="True if a dispatch was accepted")
+    next_page: Optional[int] = Field(
+        None,
+        description="Page to request for the next batch, or null if there is no more. "
+                    "Every list operation on this tool reads exactly one page, so this "
+                    "is the next page and results never repeat."
+    )
     dispatch_note: Optional[str] = Field(
         None,
         description="Explains that workflow_dispatch returns no run id, and how the run was located"
