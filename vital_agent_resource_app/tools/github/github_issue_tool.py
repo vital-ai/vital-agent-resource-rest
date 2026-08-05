@@ -1,5 +1,6 @@
 import logging
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,6 +9,10 @@ from vital_agent_resource_app.tools.tool_request import ToolRequest
 from vital_agent_resource_app.tools.tool_response import ToolResponse
 from vital_agent_resource_app.tools.github.github_client import (
     GitHubClient, GitHubToolError, rate_limit_remaining, has_next_page
+)
+from vital_agent_resource_app.services import redis_client
+from vital_agent_resource_app.services.idempotency import (
+    IdempotencyStore, build_key, build_marker
 )
 from vital_agent_resource_app.tools.github.issue_models import (
     GitHubIssueListInput, GitHubIssueGetInput, GitHubIssueCreateInput,
@@ -266,9 +271,31 @@ class GitHubIssueTool(AbstractTool):
         full_name = self.client.check_repo(vi.owner, vi.repo)
         self.client.check_write_allowed('create_issue')
 
+        if not vi.idempotency_key:
+            # No key, no guarantee asked for. guard stays null, which is
+            # distinct from "none" -- see the field description.
+            response = await self._post_issue(full_name, vi)
+            return GitHubIssueToolOutput(
+                operation='create_issue',
+                repository=full_name,
+                issue=self._map_issue(response.json()),
+                created=True,
+                rate_limit_remaining=rate_limit_remaining(response)
+            )
+
+        return await self._create_issue_idempotent(full_name, vi)
+
+    async def _post_issue(self, full_name: str, vi: GitHubIssueCreateInput,
+                          marker: Optional[str] = None):
         data: Dict[str, Any] = {'title': vi.title}
-        if vi.body is not None:
-            data['body'] = vi.body
+        body = vi.body
+        if marker:
+            # Embed the marker so GitHub can serve as the durable fallback index
+            # if the reservation is ever lost. An HTML comment on its own line:
+            # invisible when rendered, and exactly matchable by the line-mode scan.
+            body = f"{body}\n\n{marker}" if body else marker
+        if body is not None:
+            data['body'] = body
         if vi.labels:
             data['labels'] = vi.labels
         if vi.assignees:
@@ -276,16 +303,208 @@ class GitHubIssueTool(AbstractTool):
         if vi.milestone is not None:
             data['milestone'] = vi.milestone
 
-        response = await self.client.call(
+        return await self.client.call(
             self.client.gh.rest.issues.async_create,
             vi.owner, vi.repo, data=data, context=f"create_issue {full_name}"
         )
+
+    async def _create_issue_idempotent(
+            self, full_name: str, vi: GitHubIssueCreateInput) -> GitHubIssueToolOutput:
+        """create_issue with an idempotency key. See
+        planning/github/idempotent-create-issue-plan.md for the algorithm."""
+
+        if not self.client.idempotency_enabled:
+            # Loudly, never a silent unguarded create: a caller that asked for a
+            # guarantee and quietly did not get one is the whole failure mode.
+            raise GitHubToolError(
+                "idempotency_key was supplied but idempotency is disabled "
+                "({ENV}__TOOL__GITHUB__IDEMPOTENCY_ENABLED=false). Enable it or omit the "
+                "key; the issue was not created."
+            )
+
+        store = self._idempotency_store()
+        if store is None:
+            return await self._create_unguarded(
+                full_name, vi,
+                reason="the MemoryDB service is not configured or not reachable")
+
+        key = build_key(vi.owner, vi.repo, vi.idempotency_key)
+        marker = build_marker(vi.idempotency_key)
+        request_id = uuid.uuid4().hex
+
+        try:
+            reserved = await store.reserve(key, request_id)
+        except Exception as e:
+            logger.warning(f"Idempotency: reserve failed for {key}: {type(e).__name__}: {e}")
+            return await self._create_unguarded(
+                full_name, vi, reason=f"the MemoryDB service failed: {e}")
+
+        if reserved:
+            return await self._create_and_record(full_name, vi, store, key, marker,
+                                                 guard='memorydb')
+
+        state, issue_number, age = await store.read(key)
+
+        if state == 'issue':
+            issue = await self._fetch_issue(full_name, vi.owner, vi.repo, issue_number)
+            return GitHubIssueToolOutput(
+                operation='create_issue',
+                repository=full_name,
+                issue=issue,
+                created=False,
+                idempotency_guard='memorydb'
+            )
+
+        if state == 'pending' and (age is None or age < self.client.idempotency_pending_grace):
+            # Someone else is mid-flight. Reporting rather than waiting: the
+            # caller can retry, and blocking here would hold a request open for
+            # the length of another request's GitHub call.
+            return GitHubIssueToolOutput(
+                operation='create_issue',
+                repository=full_name,
+                created=False,
+                idempotency_guard='memorydb',
+                api_error=(
+                    f"Another create with this idempotency_key is in flight "
+                    f"(reserved {age if age is not None else '?'}s ago). No issue was "
+                    f"created. Retry shortly to receive the issue it files."
+                )
+            )
+
+        # Stale reservation: the creator died between reserving and recording.
+        # MemoryDB cannot say whether the issue exists; GitHub is now the only
+        # source of truth, which is what the body scan is for.
+        return await self._reconcile_stale_reservation(full_name, vi, store, key, marker, age)
+
+    async def _reconcile_stale_reservation(self, full_name, vi, store, key, marker, age):
+        logger.info(
+            f"Idempotency: stale reservation on {key} (age {age}s); reconciling against "
+            f"GitHub via body scan"
+        )
+        scan = await self._find_issues_by_body(GitHubIssueFindByBodyInput(
+            operation='find_issues_by_body', owner=vi.owner, repo=vi.repo,
+            contains=marker, match='line', state='all', max_pages=5, max_results=1
+        ))
+
+        if scan.issues:
+            found = scan.issues[0]
+            await store.resolve(key, found.number)      # repair the index
+            return GitHubIssueToolOutput(
+                operation='create_issue',
+                repository=full_name,
+                issue=found,
+                created=False,
+                idempotency_guard='scan'
+            )
+
+        if not scan.complete:
+            # The scan ran out of budget, so absence was never established.
+            # Treating that as "no duplicate" is the original bug wearing a hat.
+            if self.client.idempotency_fail_mode == 'closed':
+                raise GitHubToolError(
+                    "Could not establish whether this issue already exists: the "
+                    "reconciliation scan exhausted its page budget, and "
+                    "IDEMPOTENCY_FAIL_MODE=closed. No issue was created."
+                )
+            return await self._create_unguarded(
+                full_name, vi,
+                reason="the reconciliation scan could not establish absence")
+
+        # Scan completed and found nothing: the previous attempt died before
+        # creating anything. Take over the reservation.
+        return await self._create_and_record(full_name, vi, store, key, marker, guard='scan')
+
+    async def _create_and_record(self, full_name, vi, store, key, marker, guard):
+        try:
+            response = await self._post_issue(full_name, vi, marker=marker)
+        except GitHubToolError as e:
+            if e.status_code is not None and 400 <= e.status_code < 500:
+                # Definite failure: nothing was created, so free the key rather
+                # than blocking retries for the whole PENDING_TTL.
+                await store.release(key)
+                logger.info(f"Idempotency: released {key} after a definite {e.status_code}")
+            else:
+                # Ambiguous -- a timeout or 5xx may have been applied. Leave the
+                # reservation so reconciliation resolves it against GitHub; a
+                # clean slate here is how a duplicate gets filed.
+                logger.warning(
+                    f"Idempotency: retaining {key} after an ambiguous failure "
+                    f"({e.status_code}); reconciliation will resolve it"
+                )
+            raise
+
+        issue = self._map_issue(response.json())
+        if issue:
+            await store.resolve(key, issue.number)
+
+        return GitHubIssueToolOutput(
+            operation='create_issue',
+            repository=full_name,
+            issue=issue,
+            created=True,
+            idempotency_guard=guard,
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
+    async def _create_unguarded(self, full_name, vi, reason: str) -> GitHubIssueToolOutput:
+        """Fail-open path: create anyway, but say the guarantee was not provided.
+
+        Asymmetric cost -- a dropped alert is invisible and unrecoverable, a
+        duplicate issue is visible and cheap to close. But it must never be
+        silent, which is what guard="none" is for.
+        """
+        if self.client.idempotency_fail_mode == 'closed':
+            raise GitHubToolError(
+                f"Idempotent create refused: {reason}, and "
+                f"{{ENV}}__TOOL__GITHUB__IDEMPOTENCY_FAIL_MODE=closed. No issue was created."
+            )
+
+        logger.warning(f"Idempotency: creating without a guard because {reason}")
+        marker = build_marker(vi.idempotency_key) if vi.idempotency_key else None
+        response = await self._post_issue(full_name, vi, marker=marker)
         return GitHubIssueToolOutput(
             operation='create_issue',
             repository=full_name,
             issue=self._map_issue(response.json()),
+            created=True,
+            idempotency_guard='none',
+            api_error=(
+                f"Created without an idempotency guarantee because {reason}. "
+                f"A duplicate is possible if this request is replayed."
+            ),
             rate_limit_remaining=rate_limit_remaining(response)
         )
+
+    def _idempotency_store(self) -> Optional[IdempotencyStore]:
+        client = redis_client.get_redis()
+        if client is None:
+            return None
+        return IdempotencyStore(
+            client,
+            pending_ttl=self.client.idempotency_pending_ttl,
+            resolved_ttl=self.client.idempotency_resolved_ttl,
+        )
+
+    async def _fetch_issue(self, full_name, owner, repo, number) -> Optional[GitHubIssue]:
+        """Read back an issue the index points at.
+
+        Costs one call, and closes the dangling-number case: if the issue was
+        deleted outside this service the caller learns now rather than acting on
+        a number that no longer resolves.
+        """
+        try:
+            response = await self.client.call(
+                self.client.gh.rest.issues.async_get,
+                owner, repo, number,
+                context=f"idempotency read-back {full_name}#{number}"
+            )
+            return self._map_issue(response.json())
+        except GitHubToolError as e:
+            logger.warning(
+                f"Idempotency: index points at {full_name}#{number} but it could not be "
+                f"read: {e.message}"
+            )
+            return None
 
     async def _update_issue(self, vi: GitHubIssueUpdateInput) -> GitHubIssueToolOutput:
         full_name = self.client.check_repo(vi.owner, vi.repo)

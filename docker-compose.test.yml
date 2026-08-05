@@ -117,12 +117,16 @@ services:
     depends_on:
       app:
         condition: service_healthy
-    # The synthetic pagination suite runs first: it is offline and takes under a
-    # second, so a pagination regression fails the build before any GitHub call.
+    # Offline suites run first: sub-second, no GitHub calls, so a regression in
+    # pagination or the idempotency algorithm fails the build before anything
+    # touches a repository.
     command:
       - sh
       - -c
-      - "python tests/github_pagination_test.py && python tests/github_tools_pipeline_test.py"
+      - "python tests/github_pagination_test.py &&
+         python tests/github_idempotency_test.py &&
+         python tests/memorydb_service_test.py &&
+         python tests/github_tools_pipeline_test.py"
     networks:
       - varr_test
 

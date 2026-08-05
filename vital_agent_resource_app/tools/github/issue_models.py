@@ -61,6 +61,17 @@ class GitHubIssueCreateInput(GitHubRepoBase):
     labels: Optional[List[str]] = Field(None, description="Labels to apply")
     assignees: Optional[List[str]] = Field(None, description="Logins to assign")
     milestone: Optional[int] = Field(None, description="Milestone number")
+    idempotency_key: Optional[str] = Field(
+        None,
+        description="Deterministic identifier for the event this issue represents -- an "
+                    "alert fingerprint, a message id. Supplying it makes the create "
+                    "idempotent: a repeat with the same key returns the original issue "
+                    "instead of filing a duplicate, and the response says which happened "
+                    "via `created` and `idempotency_guard`. The key must derive "
+                    "deterministically from the source event; one that varies per retry "
+                    "(a timestamp, say) provides no guarantee. Requires the service to "
+                    "have idempotency enabled -- a key sent while it is disabled is an "
+                    "error, never a silent unguarded create.")
 
     model_config = {
         "json_schema_extra": {
@@ -417,6 +428,19 @@ class GitHubIssueToolOutput(GitHubOutputBase):
     assignable_users: List[str] = Field(
         default_factory=list,
         description="Logins that can be assigned, from list_assignable_users")
+    created: Optional[bool] = Field(
+        None,
+        description="create_issue only. False when an existing issue was returned instead "
+                    "of filing a new one. Report 'this was already filed as #N' rather "
+                    "than 'I filed it'.")
+    idempotency_guard: Optional[str] = Field(
+        None,
+        description="Which mechanism answered: 'memorydb' (the reservation index, "
+                    "guaranteed), 'scan' (reconciled against GitHub after a lost "
+                    "reservation), or 'none' (the guard was requested but unavailable, so "
+                    "the create went ahead unguarded). Null means no idempotency_key was "
+                    "supplied, so no guarantee was asked for -- distinct from 'none', "
+                    "where one was asked for and could not be given.")
     scanned: Optional[int] = Field(
         None, description="Issues examined by find_issues_by_body")
     complete: Optional[bool] = Field(

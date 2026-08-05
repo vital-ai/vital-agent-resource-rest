@@ -102,6 +102,18 @@ class GitHubClient:
 
         self.allowed_repos: Set[str] = self._parse_allowed_repos(config.get('allowed_repos'))
 
+        # Idempotency policy. The MemoryDB *connection* is a global service; the
+        # tool only carries whether to use it and with what policy.
+        self.idempotency_enabled = _as_bool(config.get('idempotency_enabled'), False)
+        self.idempotency_pending_ttl = int(config.get('idempotency_pending_ttl') or 60)
+        self.idempotency_resolved_ttl = int(config.get('idempotency_resolved_ttl') or 2592000)
+        self.idempotency_fail_mode = (config.get('idempotency_fail_mode') or 'open').lower()
+        # How long a reservation must have sat before it is treated as abandoned
+        # rather than in-flight. A fraction of PENDING_TTL, since the age is
+        # derived from the key's remaining TTL.
+        self.idempotency_pending_grace = int(
+            config.get('idempotency_pending_grace') or max(10, self.idempotency_pending_ttl // 2))
+
         if self.available:
             logger.info(
                 f"GitHub client initialized (token ...{str(pat)[-4:]}, "
@@ -109,7 +121,8 @@ class GitHubClient:
                 f"allow_writes={self.allow_writes}, allow_pr_merge={self.allow_pr_merge}, "
                 f"allow_workflow_dispatch={self.allow_workflow_dispatch}, "
                 f"allow_content_writes={self.allow_content_writes}, "
-                f"allow_default_branch_writes={self.allow_default_branch_writes})"
+                f"allow_default_branch_writes={self.allow_default_branch_writes}, "
+                f"idempotency_enabled={self.idempotency_enabled})"
             )
 
         # githubkit passes timeout=None to httpx, which means wait forever --

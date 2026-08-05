@@ -760,6 +760,71 @@ def test_find_issues_by_body():
     print(f"     closed issue #{number}")
 
 
+def test_idempotent_create():
+    """Idempotent create_issue, end to end through the service.
+
+    Skips when MemoryDB is unreachable from wherever this runs -- the guarantee
+    is unavailable there, which the tool reports as guard="none" rather than
+    failing, so a skip is honest rather than a hidden pass.
+    """
+    print("\n3h. Idempotent create_issue")
+
+    key = f"pipeline-idem-{int(time.time())}"
+
+    def payload():
+        return {'operation': 'create_issue', 'owner': OWNER, 'repo': REPO,
+                'title': '[pipeline] idempotent create',
+                'body': 'filed by the pipeline', 'idempotency_key': key}
+
+    status, body = call(payload())
+    out = tool_output(body)
+    guard = out.get('idempotency_guard')
+
+    if guard == 'none':
+        print("     SKIP  MemoryDB unreachable from here; guard reported 'none' as designed")
+        number = (out.get('issue') or {}).get('number')
+        check('a degraded create still files the issue', bool(number), str(out.get('api_error')))
+        check('and says the guarantee was not provided',
+              'without an idempotency guarantee' in (out.get('api_error') or ''),
+              str(out.get('api_error')))
+        if number:
+            call({'operation': 'close_issue', 'owner': OWNER, 'repo': REPO,
+                  'issue_number': number, 'state_reason': 'not_planned'})
+        return
+
+    number = (out.get('issue') or {}).get('number')
+    check('the guarded create files an issue', bool(number), str(out.get('api_error')))
+    check('guard reports memorydb', guard == 'memorydb', str(guard))
+    check('created is true on the first call', out.get('created') is True, str(out.get('created')))
+
+    status, body = call(payload())
+    out = tool_output(body)
+    repeat = (out.get('issue') or {}).get('number')
+    check('a repeat returns the original issue rather than filing another',
+          repeat == number, f"first={number} repeat={repeat}")
+    check('a repeat reports created=false', out.get('created') is False, str(out.get('created')))
+
+    status, body = call({'operation': 'get_issue', 'owner': OWNER, 'repo': REPO,
+                         'issue_number': number})
+    issue_body = ((tool_output(body).get('issue')) or {}).get('body') or ''
+    check('the created body carries the idempotency marker',
+          '<!-- idempotency-key:' in issue_body, issue_body[:120])
+
+    status, body = call({'operation': 'create_issue', 'owner': OWNER, 'repo': REPO,
+                         'title': '[pipeline] idempotent create, other key',
+                         'idempotency_key': key + '-other'})
+    out = tool_output(body)
+    other = (out.get('issue') or {}).get('number')
+    check('a different key files a separate issue', bool(other) and other != number,
+          f"first={number} other={other}")
+
+    for n in (number, other):
+        if n:
+            call({'operation': 'close_issue', 'owner': OWNER, 'repo': REPO,
+                  'issue_number': n, 'state_reason': 'not_planned'})
+    print(f"     closed {[n for n in (number, other) if n]}")
+
+
 def test_pull_requests():
     print("\n4. Pull requests")
 
@@ -1128,6 +1193,7 @@ def main():
         test_silent_failures_are_now_loud(users)
         test_contents_and_refs(users)
         test_find_issues_by_body()
+        test_idempotent_create()
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

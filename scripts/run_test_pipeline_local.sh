@@ -66,10 +66,12 @@ if ! kill -0 "${SERVICE_PID}" 2>/dev/null; then
   exit 2
 fi
 
-# Offline pagination suite first -- fast, and catches regressions the live
-# sandbox cannot produce.
-"${PYTHON}" tests/github_pagination_test.py
-status=$?
+# Offline suites first -- fast, and they catch regressions the live sandbox
+# cannot produce (page shapes, lost reservations, ambiguous failures).
+status=0
+for suite in github_pagination_test github_idempotency_test memorydb_service_test; do
+  "${PYTHON}" "tests/${suite}.py" || { status=$?; break; }
+done
 
 if [ ${status} -eq 0 ]; then
   TOOL_SERVICE_URL="http://localhost:${PORT}" \
