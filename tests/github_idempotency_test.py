@@ -9,6 +9,7 @@ reservation, an ambiguous timeout, a scan that runs out of budget.
 import asyncio
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -37,11 +38,14 @@ class StubRedis:
         self.data = {}      # key -> (value, ttl_ms_at_set)
         self.pttl_override = {}
 
-    async def set(self, key, value, nx=False, px=None, ex=None):
+    async def set(self, key, value, nx=False, px=None, ex=None, xx=False, get=False):
+        prior = self.data.get(key, (None, None))[0]
         if nx and key in self.data:
             return None
+        if xx and key not in self.data:
+            return prior if get else None
         self.data[key] = (value, px or (ex * 1000 if ex else None))
-        return True
+        return prior if get else True
 
     async def get(self, key):
         return self.data.get(key, (None, None))[0]
@@ -129,8 +133,72 @@ def create_input(key='evt-1', **kw):
     return GitHubIssueCreateInput(**params)
 
 
+async def test_live_race():
+    """The abandoned-reservation race, against the real cluster.
+
+    The stub above serialises, so a contender always reads a resolved key and
+    never reaches the take-over -- which means the offline suite cannot prove
+    this fix. Only true concurrency can. Verified by reverting the take-over:
+    4 concurrent requests filed 4 duplicate issues.
+
+    Skips without cluster access, so it is CI-safe.
+    """
+    print("\n6. Abandoned-reservation race (live)")
+
+    import os as _os
+    from dotenv import load_dotenv
+    load_dotenv()
+    from vital_agent_resource_app.utils.env_config import EnvConfigLoader
+    from vital_agent_resource_app.services.idempotency import build_key as _bk
+    from vital_agent_resource_app.tools.github.github_client import GitHubClient
+    from vital_agent_resource_app.tools.github.issue_models import GitHubIssueCloseInput
+
+    owner, repo = _os.getenv('GITHUB_TEST_OWNER'), _os.getenv('GITHUB_TEST_REPO')
+    mem = EnvConfigLoader.get_memorydb_config()
+    if not mem.get('url') or not owner:
+        print("  SKIP  needs MemoryDB and GITHUB_TEST_OWNER/REPO")
+        return
+
+    redis_client.init_redis(mem)
+    if not await redis_client.ping():
+        print("  SKIP  cluster not reachable from here")
+        await redis_client.close_redis()
+        return
+
+    cfg = dict(EnvConfigLoader.get_tool_config('github_tool'))
+    cfg['idempotency_pending_grace'] = '1'
+    tools = [GitHubIssueTool(cfg, GitHubClient(cfg)) for _ in range(4)]
+
+    ikey = f"race-{int(time.time())}"
+    rkey = _bk(owner, repo, ikey)
+    r = redis_client.get_redis()
+    await r.set(rkey, "pending:dead-request", px=3000)
+    await asyncio.sleep(2.2)          # age it past the grace window
+
+    def mk():
+        return GitHubIssueCreateInput(
+            operation='create_issue', owner=owner, repo=repo,
+            title='[race] abandoned-reservation take-over', idempotency_key=ikey)
+
+    outs = await asyncio.gather(*[t._create_issue(mk()) for t in tools],
+                                return_exceptions=True)
+    numbers = sorted({o.issue.number for o in outs if getattr(o, 'issue', None)})
+    check('four concurrent take-overs file exactly one issue',
+          len(numbers) == 1, f"filed {numbers}")
+    check('exactly one reports created=true',
+          sum(1 for o in outs if getattr(o, 'created', None) is True) == 1,
+          str([getattr(o, 'created', None) for o in outs]))
+
+    for n in numbers:
+        await tools[0]._close_issue(GitHubIssueCloseInput(
+            operation='close_issue', owner=owner, repo=repo,
+            issue_number=n, state_reason='not_planned'))
+    await r.delete(rkey)
+    await redis_client.close_redis()
+
+
 async def main():
-    print("Idempotent create_issue (offline)")
+    print("Idempotent create_issue")
     print("=" * 60)
 
     print("\n1. Happy path and repeats")
@@ -221,6 +289,64 @@ async def main():
     check('guard reports scan for the takeover', out.idempotency_guard == 'scan',
           str(out.idempotency_guard))
 
+    print("\n4b. Take-over of an abandoned reservation is atomic")
+    # Two requests both find the same stale reservation, both scan, both find
+    # nothing. Without an atomic take-over both create: two issues, one key.
+    # Timeouts route into this path and a timeout usually means a retry is
+    # already in flight, so this is the expected shape, not an unlucky one.
+    r = StubRedis(); redis_client._client = r
+    tool_a, gh_a = make_tool(existing=[])
+    tool_b, gh_b = make_tool(existing=[])
+    key = build_key('o', 'r', 'evt-race')
+    await r.set(key, 'pending:dead', px=60000)
+    r.pttl_override[key] = 1000
+    outs = await asyncio.gather(
+        tool_a._create_issue(create_input('evt-race')),
+        tool_b._create_issue(create_input('evt-race')),
+    )
+    total_creates = len(gh_a.creates) + len(gh_b.creates)
+    check('exactly one contender creates', total_creates == 1,
+          f"{total_creates} issues filed for one key")
+    losers = [o for o in outs if o.created is False]
+    check('the other contender is told it did not create',
+          len(losers) == 1, str([(o.created, o.api_error) for o in outs]))
+    winner = next(o for o in outs if o.created is True)
+    check('and is pointed at the same issue, or told it lost the take-over',
+          (losers[0].issue and losers[0].issue.number == winner.issue.number)
+          or 'took over' in (losers[0].api_error or ''),
+          f"loser issue={losers[0].issue} error={losers[0].api_error}")
+
+    # The two contenders above serialise through the stub, so the loser reads a
+    # resolved key. Exercise the contended take-over directly, which is the case
+    # that has to hold when they truly overlap.
+    r2 = StubRedis()
+    from vital_agent_resource_app.services.idempotency import IdempotencyStore
+    store2 = IdempotencyStore(r2, pending_ttl=60, resolved_ttl=100)
+    k2 = 'gh:idem:v1:o/r:contended'
+    await r2.set(k2, 'pending:dead', px=60000)
+    _, _, _, observed = await store2.read(k2)
+    wins = [await store2.take_over(k2, observed, f'req{i}') for i in range(4)]
+    check('exactly one of four take-overs wins', sum(1 for w in wins if w) == 1,
+          f"{sum(1 for w in wins if w)} winners: {wins}")
+
+    # The key expiring between the read and the take-over must not double-create.
+    r = StubRedis(); redis_client._client = r
+    tool, gh = make_tool(existing=[])
+    key = build_key('o', 'r', 'evt-vanish')
+    await r.set(key, 'pending:dead', px=60000)
+    r.pttl_override[key] = 1000
+    original_read = tool._idempotency_store
+    async def vanish_then_create(vi):
+        return await tool._create_issue(vi)
+    # simulate: the key disappears just before take_over runs
+    store = tool._idempotency_store()
+    state, num, age, raw = await store.read(key)
+    await r.delete(key)
+    won = await store.take_over(key, raw, 'me')
+    check('a vanished key falls back to a fresh reservation', won is True, str(won))
+    check('and the reservation is now held', (await r.get(key)) == 'pending:me',
+          str(await r.get(key)))
+
     print("\n5. Degraded service")
     redis_client._client = None
     tool, gh = make_tool()
@@ -246,6 +372,8 @@ async def main():
     except GitHubToolError as e:
         check('a key while disabled is an error', 'disabled' in e.message, e.message[:80])
     check('nothing was created while disabled', not gh.creates, str(gh.creates))
+
+    await test_live_race()
 
     print("\n" + "=" * 60)
     print(f"Passed: {len(PASSED)}   Failed: {len(FAILED)}")

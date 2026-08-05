@@ -80,32 +80,61 @@ class IdempotencyStore:
         """
         await self._r.delete(key)
 
-    async def read(self, key: str) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+    async def take_over(self, key: str, observed: str, request_id: str) -> bool:
+        """Claim an abandoned reservation. True if this caller won.
+
+        `SET ... XX GET` writes and returns the prior value atomically, so of any
+        number of contenders exactly one sees `observed` and therefore exactly
+        one proceeds to create. Without this, two requests that both find the
+        same stale reservation both create -- two issues, one key.
+
+        A loser does overwrite the winner's reservation on its way to losing,
+        since XX writes unconditionally when the key exists. That is benign: the
+        loser does not create, and the winner's `resolve` overwrites the key with
+        the issue number regardless. If the winner then dies, the key simply sits
+        pending until the next reconciliation, which is where it started.
+        """
+        prior = await self._r.set(
+            key, f"pending:{request_id}", px=self.pending_ttl * 1000, xx=True, get=True
+        )
+        if prior is None:
+            # The key expired between reading it and now. Nobody holds it, so
+            # fall back to a fresh reservation -- which is itself atomic.
+            return await self.reserve(key, request_id)
+        return prior == observed
+
+    async def read(self, key: str) -> Tuple[Optional[str], Optional[int], Optional[int], Optional[str]]:
         """Current state of a key.
 
-        Returns (state, issue_number, pending_age_seconds) where state is
-        'issue', 'pending' or None.
+        Returns (state, issue_number, pending_age_seconds, raw_value) where state
+        is 'issue', 'pending' or None. The raw value is what take_over compares
+        against, so a caller can tell whether the reservation it saw is still the
+        one it is displacing.
 
         Pending age comes from PTTL rather than a timestamp in the value: no
         clock is involved, so it cannot be skewed between replicas.
         """
         value = await self._r.get(key)
         if not value:
-            return None, None, None
+            return None, None, None, None
 
         if value.startswith("issue:"):
             try:
-                return 'issue', int(value.split(":", 1)[1]), None
+                return 'issue', int(value.split(":", 1)[1]), None, value
             except (ValueError, IndexError):
                 logger.warning(f"Idempotency key {key} holds an unparseable value {value!r}")
-                return None, None, None
+                return None, None, None, value
 
         if value.startswith("pending:"):
             remaining_ms = await self._r.pttl(key)
+            # PTTL answers -2 for a missing key and -1 for one with no TTL.
+            # Treating either as a number would compute a huge age and send a
+            # key that just expired into reconciliation, so leave age unknown --
+            # callers treat unknown as in-flight, which is the safe direction.
             age = None
             if isinstance(remaining_ms, int) and remaining_ms >= 0:
                 age = max(0, self.pending_ttl - int(remaining_ms / 1000))
-            return 'pending', None, age
+            return 'pending', None, age, value
 
         logger.warning(f"Idempotency key {key} holds an unrecognized value {value!r}")
-        return None, None, None
+        return None, None, None, value

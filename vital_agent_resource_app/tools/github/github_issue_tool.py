@@ -343,7 +343,7 @@ class GitHubIssueTool(AbstractTool):
             return await self._create_and_record(full_name, vi, store, key, marker,
                                                  guard='memorydb')
 
-        state, issue_number, age = await store.read(key)
+        state, issue_number, age, raw = await store.read(key)
 
         if state == 'issue':
             issue = await self._fetch_issue(full_name, vi.owner, vi.repo, issue_number)
@@ -374,9 +374,11 @@ class GitHubIssueTool(AbstractTool):
         # Stale reservation: the creator died between reserving and recording.
         # MemoryDB cannot say whether the issue exists; GitHub is now the only
         # source of truth, which is what the body scan is for.
-        return await self._reconcile_stale_reservation(full_name, vi, store, key, marker, age)
+        return await self._reconcile_stale_reservation(
+            full_name, vi, store, key, marker, age, raw, request_id)
 
-    async def _reconcile_stale_reservation(self, full_name, vi, store, key, marker, age):
+    async def _reconcile_stale_reservation(self, full_name, vi, store, key, marker, age,
+                                           observed, request_id):
         logger.info(
             f"Idempotency: stale reservation on {key} (age {age}s); reconciling against "
             f"GitHub via body scan"
@@ -411,7 +413,24 @@ class GitHubIssueTool(AbstractTool):
                 reason="the reconciliation scan could not establish absence")
 
         # Scan completed and found nothing: the previous attempt died before
-        # creating anything. Take over the reservation.
+        # creating anything. Take the reservation over *atomically* before
+        # creating -- the scan proved nobody had created, not that this caller is
+        # the one entitled to. Without this, two requests that both find the same
+        # stale reservation both create. Timeouts route into this path and a
+        # timeout usually means a retry is already in flight, so concurrent
+        # arrivals here are the expected shape rather than an unlucky one.
+        if observed and not await store.take_over(key, observed, request_id):
+            return GitHubIssueToolOutput(
+                operation='create_issue',
+                repository=full_name,
+                created=False,
+                idempotency_guard='memorydb',
+                api_error=(
+                    "Another request took over this abandoned reservation first. No issue "
+                    "was created here. Retry shortly to receive the issue it files."
+                )
+            )
+
         return await self._create_and_record(full_name, vi, store, key, marker, guard='scan')
 
     async def _create_and_record(self, full_name, vi, store, key, marker, guard):
