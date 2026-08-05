@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Literal, Union
 
 from vital_agent_resource_app.tools.github.common_models import GitHubRepoBase, GitHubOutputBase
@@ -103,12 +103,77 @@ class GitHubDeleteFileInput(GitHubRepoBase):
                     "looks it up if omitted.")
 
 
+class GitHubFileWrite(BaseModel):
+    """One file in a multi-file commit."""
+    path: str = Field(..., description="Repository-relative path", min_length=1)
+    content: str = Field(..., description="Full file content as text (not base64)")
+
+
+class GitHubWriteFilesInput(GitHubRepoBase):
+    """Create, update and/or delete several files in ONE commit, via the Git Data API.
+
+    The multi-file counterpart to create_or_update_file. Use it when a change is
+    only correct as a unit -- code plus the test that proves it, or an add plus
+    the delete that makes it a move. Sequential single-file writes cannot express
+    that: a failure part-way through leaves the branch half-applied, in a state
+    no record describes.
+    """
+    operation: Literal["write_files"] = Field(..., description="Operation to perform")
+    branch: str = Field(..., description="Branch to commit on", min_length=1)
+    message: str = Field(..., description="Commit message", min_length=1)
+    files: List[GitHubFileWrite] = Field(
+        default_factory=list, description="Files to create or overwrite")
+    deletions: List[str] = Field(
+        default_factory=list,
+        description="Repository-relative paths to remove in the same commit")
+    from_ref: Optional[str] = Field(
+        None,
+        description="Base the commit on this ref instead of the branch's current head. "
+                    "Setting it makes the result a function of the inputs alone -- the "
+                    "branch becomes base + this tree -- so re-running yields the same "
+                    "single-commit diff rather than stacking a commit per attempt. "
+                    "Requires force=true, because it is a non-fast-forward update.")
+    force: bool = Field(
+        False,
+        description="Allow a non-fast-forward branch update, discarding commits the branch "
+                    "had. Required with from_ref. Explicit rather than implied: this is how "
+                    "the idempotent re-run property is achieved and also how history is "
+                    "lost, so it should never be a side effect of an omitted field.")
+
+    @model_validator(mode='after')
+    def check_payload(self):
+        if not self.files and not self.deletions:
+            # An empty commit is indistinguishable from a bug that computed no
+            # changes, so refuse rather than record one.
+            raise ValueError(
+                "write_files needs at least one entry in `files` or `deletions`; "
+                "an empty commit would hide a caller that computed no changes."
+            )
+        if self.from_ref and not self.force:
+            raise ValueError(
+                "from_ref rewrites the branch to base + this tree, which is a "
+                "non-fast-forward update. Set force=true to confirm."
+            )
+        paths = [f.path for f in self.files]
+        overlap = sorted(set(paths) & set(self.deletions))
+        if overlap:
+            raise ValueError(
+                f"{overlap} appear in both `files` and `deletions`; the commit would "
+                f"both write and remove them."
+            )
+        duplicates = sorted({p for p in paths if paths.count(p) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate paths in `files`: {duplicates}")
+        return self
+
+
 GitHubCodeToolInput = Union[
     GitHubCreateBranchInput,
     GitHubWriteFileInput,
     GitHubMergeInput,
     GitHubDeleteBranchInput,
     GitHubDeleteFileInput,
+    GitHubWriteFilesInput,
 ]
 
 GITHUB_CODE_OPERATION_MODELS = {
@@ -117,6 +182,7 @@ GITHUB_CODE_OPERATION_MODELS = {
     "merge_pr": GitHubMergeInput,
     "delete_branch": GitHubDeleteBranchInput,
     "delete_file": GitHubDeleteFileInput,
+    "write_files": GitHubWriteFilesInput,
 }
 
 
@@ -144,6 +210,18 @@ class GitHubDeleteResult(BaseModel):
     commit_sha: Optional[str] = Field(None, description="Commit recording a file deletion")
 
 
+class GitHubCommitResult(BaseModel):
+    branch: str = Field(..., description="Branch the commit landed on")
+    commit_sha: Optional[str] = Field(None, description="SHA of the new commit")
+    tree_sha: Optional[str] = Field(None, description="SHA of the new tree")
+    parent_sha: Optional[str] = Field(None, description="Commit this was based on")
+    written: List[str] = Field(default_factory=list, description="Paths created or updated")
+    deleted: List[str] = Field(default_factory=list, description="Paths removed")
+    branch_created: bool = Field(False, description="True if the branch did not exist")
+    forced: bool = Field(False, description="True if the ref was force-updated")
+    html_url: Optional[str] = Field(None, description="Browser URL for the commit")
+
+
 class GitHubCodeToolOutput(GitHubOutputBase):
     """Output model for the GitHub code tool"""
     tool: Literal["github_code_tool"] = Field("github_code_tool", description="Tool identifier")
@@ -155,6 +233,8 @@ class GitHubCodeToolOutput(GitHubOutputBase):
         None, description="Outcome of a merge")
     delete_result: Optional[GitHubDeleteResult] = Field(
         None, description="Outcome of a branch or file deletion")
+    commit_result: Optional[GitHubCommitResult] = Field(
+        None, description="Outcome of a multi-file commit")
 
     model_config = {
         "json_schema_extra": {

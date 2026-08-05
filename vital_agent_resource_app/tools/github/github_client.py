@@ -21,6 +21,11 @@ DEFAULT_MAX_BODY_CHARS = 4000
 # the other tools in this app.
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
+# Per-file ceiling for content writes. GitHub's own blob limit is far higher, but
+# an agent shipping a megabyte of generated text into a repository is a bug more
+# often than an intent, and the failure should be legible rather than a slow push.
+DEFAULT_MAX_FILE_BYTES = 1_000_000
+
 
 class GitHubToolError(Exception):
     """Expected failure (config, allowlist, permission, or GitHub API error).
@@ -85,6 +90,7 @@ class GitHubClient:
 
         self.base_url = config.get('api_base_url') or None
         self.max_body_chars = int(config.get('max_body_chars') or DEFAULT_MAX_BODY_CHARS)
+        self.max_file_bytes = int(config.get('max_file_bytes') or DEFAULT_MAX_FILE_BYTES)
 
         # Writes are allowed by default; this flag is an explicit off-switch.
         self.allow_writes = _as_bool(config.get('allow_writes'), True)
@@ -204,6 +210,15 @@ class GitHubClient:
             )
 
         return full_name
+
+    def check_file_size(self, path: str, content: str) -> None:
+        """Refuse an oversized file before it reaches GitHub."""
+        size = len(content.encode('utf-8'))
+        if size > self.max_file_bytes:
+            raise GitHubToolError(
+                f"'{path}' is {size} bytes, over the {self.max_file_bytes}-byte per-file "
+                f"limit. Raise {{ENV}}__TOOL__GITHUB__MAX_FILE_BYTES if this is intended."
+            )
 
     def check_write_allowed(self, operation: str, gate: str = 'allow_writes') -> None:
         """Raise if the gate covering this mutation is off."""

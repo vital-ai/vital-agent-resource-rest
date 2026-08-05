@@ -825,6 +825,102 @@ def test_idempotent_create():
     print(f"     closed {[n for n in (number, other) if n]}")
 
 
+def test_multi_file_commit():
+    """write_files: one commit across several files, and the re-run property.
+
+    The re-run check is the substantive one -- from_ref + force makes the branch
+    a function of the inputs, so retrying a change yields the same single-commit
+    diff instead of stacking a commit per attempt.
+    """
+    print("\n3i. Multi-file commit and identity")
+
+    status, body = call({'operation': 'get_authenticated_user'}, tool='github_repo_tool')
+    out = tool_output(body)
+    user = out.get('authenticated_user') or {}
+    check('get_authenticated_user returns a login', bool(user.get('login')),
+          f"api_error={out.get('api_error')} user={user}")
+    check('get_authenticated_user needs no owner/repo', out.get('api_error') is None,
+          str(out.get('api_error')))
+
+    branch = f"multi-{int(time.time())}"
+    files = [{'path': f'multi/{branch}/impl.py', 'content': 'def f():\n    return 1\n'},
+             {'path': f'multi/{branch}/test_impl.py', 'content': 'def test_f():\n    assert True\n'}]
+
+    status, body = call({'operation': 'write_files', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch, 'message': 'add code and its test',
+                         'files': files}, tool='github_code_tool')
+    out = tool_output(body)
+    r1 = out.get('commit_result') or {}
+    check('write_files commits several files at once',
+          len(r1.get('written', [])) == 2 and bool(r1.get('commit_sha')),
+          f"api_error={out.get('api_error')} result={r1}")
+    check('write_files creates the branch when absent', r1.get('branch_created') is True,
+          str(r1))
+
+    status, body = call({'operation': 'write_files', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch, 'message': 'add code and its test',
+                         'files': files, 'from_ref': default_branch_name(),
+                         'force': True}, tool='github_code_tool')
+    out = tool_output(body)
+    r2 = out.get('commit_result') or {}
+    check('a re-run with from_ref produces the same tree',
+          r2.get('tree_sha') == r1.get('tree_sha'),
+          f"{r2.get('tree_sha')} vs {r1.get('tree_sha')}")
+
+    status, body = call({'operation': 'compare_refs', 'owner': OWNER, 'repo': REPO,
+                         'base': default_branch_name(), 'head': branch},
+                        tool='github_repo_tool')
+    comp = tool_output(body).get('comparison') or {}
+    check('the re-run does not stack commits', comp.get('ahead_by') == 1,
+          f"ahead_by={comp.get('ahead_by')} -- a stacked commit per attempt is the failure")
+
+    # add + delete in one commit is how a move is expressed
+    status, body = call({'operation': 'write_files', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch, 'message': 'move impl',
+                         'files': [{'path': f'multi/{branch}/moved.py', 'content': 'def f():\n    return 1\n'}],
+                         'deletions': [f'multi/{branch}/impl.py']}, tool='github_code_tool')
+    out = tool_output(body)
+    r3 = out.get('commit_result') or {}
+    check('a move is one commit with a write and a delete',
+          r3.get('written') and r3.get('deleted'), str(r3))
+
+    status, body = call({'operation': 'get_file_contents', 'owner': OWNER, 'repo': REPO,
+                         'path': f'multi/{branch}/impl.py', 'ref': branch},
+                        tool='github_repo_tool')
+    check('the moved-from path is gone',
+          tool_output(body).get('api_status_code') == 404,
+          str(tool_output(body).get('api_error'))[:100])
+
+    # Guards
+    status, body = call({'operation': 'write_files', 'owner': OWNER, 'repo': REPO,
+                         'branch': default_branch_name(), 'message': 'x', 'force': True,
+                         'files': [{'path': 'x.md', 'content': 'x'}]}, tool='github_code_tool')
+    check('force against the default branch is refused',
+          'Refusing to force-update' in (tool_output(body).get('api_error') or ''),
+          str(tool_output(body).get('api_error'))[:120])
+
+    status, body = call({'operation': 'write_files', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch, 'message': 'x', 'files': [], 'deletions': []},
+                        expect_status=422, tool='github_code_tool')
+    check('an empty commit is rejected by validation', status == 422, f"status={status}")
+
+    status, body = call({'operation': 'write_files', 'owner': OWNER, 'repo': REPO,
+                         'branch': branch, 'message': 'x', 'from_ref': 'main',
+                         'files': [{'path': 'x', 'content': 'x'}]},
+                        expect_status=422, tool='github_code_tool')
+    check('from_ref without force is rejected', status == 422, f"status={status}")
+
+    call({'operation': 'delete_branch', 'owner': OWNER, 'repo': REPO, 'branch': branch},
+         tool='github_code_tool')
+    print(f"     deleted branch {branch}")
+
+
+def default_branch_name():
+    status, body = call({'operation': 'get_repo', 'owner': OWNER, 'repo': REPO},
+                        tool='github_repo_tool')
+    return ((tool_output(body).get('repository_info')) or {}).get('default_branch') or 'main'
+
+
 def test_pull_requests():
     print("\n4. Pull requests")
 
@@ -1194,6 +1290,7 @@ def main():
         test_contents_and_refs(users)
         test_find_issues_by_body()
         test_idempotent_create()
+        test_multi_file_commit()
         pr_number, branch = test_pull_requests()
         test_actions()
         test_actions_dispatch()

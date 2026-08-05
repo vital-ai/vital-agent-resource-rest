@@ -12,8 +12,9 @@ from vital_agent_resource_app.tools.github.github_client import (
 from vital_agent_resource_app.tools.github.repo_models import GitHubBranch
 from vital_agent_resource_app.tools.github.code_models import (
     GitHubCreateBranchInput, GitHubWriteFileInput, GitHubMergeInput,
-    GitHubDeleteBranchInput, GitHubDeleteFileInput,
-    GitHubWriteResult, GitHubMergeResult, GitHubDeleteResult, GitHubCodeToolOutput
+    GitHubDeleteBranchInput, GitHubDeleteFileInput, GitHubWriteFilesInput,
+    GitHubWriteResult, GitHubMergeResult, GitHubDeleteResult, GitHubCommitResult,
+    GitHubCodeToolOutput
 )
 
 logger = logging.getLogger("VitalAgentContainerLogger")
@@ -33,6 +34,7 @@ class GitHubCodeTool(AbstractTool):
       create_branch          allow_writes
       delete_branch          allow_writes  (never the default branch)
       delete_file            allow_content_writes        (default off)
+      write_files            allow_content_writes        (default off)
       create_or_update_file  allow_content_writes        (default off)
       merge_pr               allow_pr_merge              (default off)
     and committing to the default branch additionally needs
@@ -48,6 +50,7 @@ class GitHubCodeTool(AbstractTool):
             GitHubMergeInput: self._merge_pr,
             GitHubDeleteBranchInput: self._delete_branch,
             GitHubDeleteFileInput: self._delete_file,
+            GitHubWriteFilesInput: self._write_files,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -169,6 +172,8 @@ class GitHubCodeTool(AbstractTool):
 
         # GitHub needs the current blob SHA to replace an existing file. Look it
         # up rather than making the caller do it, but only when not supplied.
+        self.client.check_file_size(vi.path, vi.content)
+
         sha = vi.sha
         if sha is None:
             sha = await self._existing_blob_sha(full_name, vi.owner, vi.repo, vi.path, vi.branch)
@@ -318,6 +323,150 @@ class GitHubCodeTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
+    async def _write_files(self, vi: GitHubWriteFilesInput) -> GitHubCodeToolOutput:
+        """Several files in one commit, via the Git Data API.
+
+        blob per file -> tree on top of the base tree -> commit -> update ref.
+        A tree entry with sha=None is how a deletion is expressed, which is why
+        adds and removes compose into a single commit.
+        """
+        full_name = self.client.check_repo(vi.owner, vi.repo)
+        self.client.check_write_allowed('write_files', gate='allow_content_writes')
+
+        default_branch = await self._default_branch(full_name, vi.owner, vi.repo)
+
+        # Checked before the configurable default-branch gate: this one is
+        # refused outright, so it should be the reason the caller is told, not
+        # shadowed by a flag they might otherwise think of flipping.
+        if vi.force and vi.branch == default_branch:
+            # Refused, not gated. A force-update to the default branch discards
+            # history everything else is built on, and no configuration flag
+            # should make that reachable -- same stance as delete_branch.
+            raise GitHubToolError(
+                f"Refusing to force-update the default branch '{vi.branch}' on {full_name}. "
+                f"This is refused outright, not gated by configuration: it would discard "
+                f"commits on the branch everything else builds from."
+            )
+
+        self.client.check_default_branch_write(vi.branch, default_branch, full_name)
+
+        for f in vi.files:
+            self.client.check_file_size(f.path, f.content)
+
+        # Resolve the base commit: from_ref when given (making the result a
+        # function of the inputs alone), otherwise the branch's current head.
+        base_ref = vi.from_ref or vi.branch
+        branch_exists = True
+        try:
+            ref_response = await self.client.call(
+                self.client.gh.rest.git.async_get_ref,
+                vi.owner, vi.repo, f"heads/{base_ref}",
+                context=f"write_files resolve {full_name}:{base_ref}"
+            )
+            base_sha = ((ref_response.json() or {}).get('object') or {}).get('sha')
+        except GitHubToolError as e:
+            if e.status_code != 404 or vi.from_ref:
+                raise
+            # The target branch does not exist yet and no base was named: start
+            # from the default branch and create it.
+            branch_exists = False
+            ref_response = await self.client.call(
+                self.client.gh.rest.git.async_get_ref,
+                vi.owner, vi.repo, f"heads/{default_branch}",
+                context=f"write_files resolve {full_name}:{default_branch}"
+            )
+            base_sha = ((ref_response.json() or {}).get('object') or {}).get('sha')
+
+        if not base_sha:
+            raise GitHubToolError(f"Could not resolve '{base_ref}' on {full_name}.")
+
+        if vi.from_ref:
+            # Does the branch we are about to point at actually exist?
+            try:
+                await self.client.call(
+                    self.client.gh.rest.git.async_get_ref,
+                    vi.owner, vi.repo, f"heads/{vi.branch}",
+                    context=f"write_files check {full_name}:{vi.branch}"
+                )
+            except GitHubToolError as e:
+                if e.status_code != 404:
+                    raise
+                branch_exists = False
+
+        base_commit = await self.client.call(
+            self.client.gh.rest.git.async_get_commit,
+            vi.owner, vi.repo, base_sha,
+            context=f"write_files base commit {full_name}"
+        )
+        base_tree_sha = ((base_commit.json() or {}).get('tree') or {}).get('sha')
+
+        tree_entries = []
+        for f in vi.files:
+            blob = await self.client.call(
+                self.client.gh.rest.git.async_create_blob,
+                vi.owner, vi.repo,
+                data={'content': f.content, 'encoding': 'utf-8'},
+                context=f"write_files blob {full_name}:{f.path}"
+            )
+            tree_entries.append({
+                'path': f.path, 'mode': '100644', 'type': 'blob',
+                'sha': (blob.json() or {}).get('sha'),
+            })
+        for path in vi.deletions:
+            # sha=None removes the path from the tree.
+            tree_entries.append({
+                'path': path, 'mode': '100644', 'type': 'blob', 'sha': None,
+            })
+
+        tree = await self.client.call(
+            self.client.gh.rest.git.async_create_tree,
+            vi.owner, vi.repo,
+            data={'base_tree': base_tree_sha, 'tree': tree_entries},
+            context=f"write_files tree {full_name}"
+        )
+        tree_sha = (tree.json() or {}).get('sha')
+
+        commit = await self.client.call(
+            self.client.gh.rest.git.async_create_commit,
+            vi.owner, vi.repo,
+            data={'message': vi.message, 'tree': tree_sha, 'parents': [base_sha]},
+            context=f"write_files commit {full_name}"
+        )
+        commit_json = commit.json() or {}
+        commit_sha = commit_json.get('sha')
+
+        if branch_exists:
+            await self.client.call(
+                self.client.gh.rest.git.async_update_ref,
+                vi.owner, vi.repo, f"heads/{vi.branch}",
+                data={'sha': commit_sha, 'force': bool(vi.force)},
+                context=f"write_files update ref {full_name}:{vi.branch}"
+            )
+        else:
+            await self.client.call(
+                self.client.gh.rest.git.async_create_ref,
+                vi.owner, vi.repo,
+                data={'ref': f"refs/heads/{vi.branch}", 'sha': commit_sha},
+                context=f"write_files create ref {full_name}:{vi.branch}"
+            )
+
+        return GitHubCodeToolOutput(
+            operation='write_files',
+            repository=full_name,
+            commit_result=GitHubCommitResult(
+                branch=vi.branch,
+                commit_sha=commit_sha,
+                tree_sha=tree_sha,
+                parent_sha=base_sha,
+                written=[f.path for f in vi.files],
+                deleted=list(vi.deletions),
+                branch_created=not branch_exists,
+                forced=bool(vi.force) and branch_exists,
+                html_url=commit_json.get('html_url'),
+            ),
+            rate_limit_remaining=rate_limit_remaining(commit)
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -377,6 +526,11 @@ class GitHubCodeTool(AbstractTool):
         if output.merge_result:
             logger.info(f"Merge: merged={output.merge_result.merged} "
                         f"sha={output.merge_result.sha}")
+        if output.commit_result:
+            c = output.commit_result
+            logger.info(f"Committed {len(c.written)} write(s) and {len(c.deleted)} "
+                        f"deletion(s) to {c.branch} -> {c.commit_sha} "
+                        f"(created={c.branch_created} forced={c.forced})")
         if output.delete_result:
             d = output.delete_result
             logger.info(f"Deleted {d.kind} {d.target}"

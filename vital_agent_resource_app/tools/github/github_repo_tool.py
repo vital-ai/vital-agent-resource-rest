@@ -14,6 +14,7 @@ from vital_agent_resource_app.tools.github.github_client import (
 from vital_agent_resource_app.tools.github.repo_models import (
     GitHubRepoGetInput, GitHubGetFileInput, GitHubListBranchesInput,
     GitHubListCommitsInput, GitHubCompareRefsInput, GitHubGetCommitInput,
+    GitHubGetAuthenticatedUserInput, GitHubAuthenticatedUser,
     GitHubRepository, GitHubFileContent, GitHubBranch, GitHubCommit,
     GitHubComparison, GitHubRepoToolOutput
 )
@@ -43,6 +44,7 @@ class GitHubRepoTool(AbstractTool):
             GitHubListCommitsInput: self._list_commits,
             GitHubCompareRefsInput: self._compare_refs,
             GitHubGetCommitInput: self._get_commit,
+            GitHubGetAuthenticatedUserInput: self._get_authenticated_user,
         }
 
     def get_examples(self) -> List[Dict[str, Any]]:
@@ -332,6 +334,27 @@ class GitHubRepoTool(AbstractTool):
             rate_limit_remaining=rate_limit_remaining(response)
         )
 
+    async def _get_authenticated_user(
+            self, vi: GitHubGetAuthenticatedUserInput) -> GitHubRepoToolOutput:
+        # No check_repo: this operation is about the token, not a repository, so
+        # the allowlist has nothing to check. It still requires the service to be
+        # configured, which check_available enforces inside call().
+        self.client.check_available()
+
+        response = await self.client.call(
+            self.client.gh.rest.users.async_get_authenticated,
+            context="get_authenticated_user"
+        )
+        data = response.json() or {}
+        return GitHubRepoToolOutput(
+            operation='get_authenticated_user',
+            authenticated_user=GitHubAuthenticatedUser(
+                login=data.get('login') or '',
+                type=data.get('type'),
+            ),
+            rate_limit_remaining=rate_limit_remaining(response)
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -407,6 +430,9 @@ class GitHubRepoTool(AbstractTool):
         logger.info("=" * 80)
         logger.info(f"GITHUB REPO TOOL - {output.operation}")
         logger.info("=" * 80)
+        if output.authenticated_user:
+            logger.info(f"Authenticated as {output.authenticated_user.login} "
+                        f"({output.authenticated_user.type})")
         info = output.repository_info
         if info:
             logger.info(f"{info.full_name}  private={info.private}  "

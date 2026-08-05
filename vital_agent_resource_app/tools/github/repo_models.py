@@ -12,6 +12,24 @@ from vital_agent_resource_app.tools.github.common_models import GitHubRepoBase, 
 # grants no write authority -- see code_models.py.
 # ---------------------------------------------------------------------------
 
+class GitHubGetAuthenticatedUserInput(BaseModel):
+    """Return the account the service's token authenticates as.
+
+    For callers that must distinguish their own writes from a third party's: an
+    agent conversing on an issue thread has to know which comments are its own,
+    and no other operation reveals it.
+
+    Deliberately NOT built on GitHubRepoBase. Every other operation is
+    repo-scoped and allowlist-checked; this one is about the token, not a
+    repository, and requiring an owner/repo it never uses would be a field the
+    caller has to invent -- and would imply an allowlist check that does not
+    apply. It returns only the login and account type: a fuller profile is more
+    personal data on the wire than the use case justifies.
+    """
+    operation: Literal["get_authenticated_user"] = Field(
+        ..., description="Operation to perform")
+
+
 class GitHubRepoGetInput(GitHubRepoBase):
     """Get repository metadata.
 
@@ -96,6 +114,7 @@ GitHubRepoToolInput = Union[
     GitHubListCommitsInput,
     GitHubCompareRefsInput,
     GitHubGetCommitInput,
+    GitHubGetAuthenticatedUserInput,
 ]
 
 GITHUB_REPO_OPERATION_MODELS = {
@@ -105,6 +124,7 @@ GITHUB_REPO_OPERATION_MODELS = {
     "list_commits": GitHubListCommitsInput,
     "compare_refs": GitHubCompareRefsInput,
     "get_commit": GitHubGetCommitInput,
+    "get_authenticated_user": GitHubGetAuthenticatedUserInput,
 }
 
 
@@ -172,6 +192,11 @@ class GitHubComparison(BaseModel):
     files_changed: Optional[int] = Field(None, description="Number of files changed")
 
 
+class GitHubAuthenticatedUser(BaseModel):
+    login: str = Field(..., description="Account the service's token authenticates as")
+    type: Optional[str] = Field(None, description="User or Bot")
+
+
 class GitHubRepoToolOutput(GitHubOutputBase):
     """Output model for the GitHub repository tool"""
     tool: Literal["github_repo_tool"] = Field("github_repo_tool", description="Tool identifier")
@@ -183,6 +208,8 @@ class GitHubRepoToolOutput(GitHubOutputBase):
     commits: List[GitHubCommit] = Field(default_factory=list, description="Commits")
     comparison: Optional[GitHubComparison] = Field(None, description="Ref comparison summary")
     commit: Optional[GitHubCommit] = Field(None, description="Single commit, from get_commit")
+    authenticated_user: Optional[GitHubAuthenticatedUser] = Field(
+        None, description="Identity the service's token authenticates as")
     files: List[dict] = Field(
         default_factory=list, description="Changed files from compare_refs")
 
