@@ -373,6 +373,20 @@ async def main():
         check('a key while disabled is an error', 'disabled' in e.message, e.message[:80])
     check('nothing was created while disabled', not gh.creates, str(gh.creates))
 
+    # Disabled fails regardless of fail_mode. guard="none" would be the steady
+    # state here, so it signals nothing -- failing is the only way the mismatch
+    # between what the caller asked for and what the deployment provides
+    # surfaces. fail-open is only defensible where the degradation is observable.
+    tool, gh = make_tool()
+    tool.client.idempotency_enabled = False
+    tool.client.idempotency_fail_mode = 'open'
+    try:
+        await tool._create_issue(create_input('evt-disabled-open'))
+        check('disabled fails even with fail_mode=open', False, 'it created anyway')
+    except GitHubToolError as e:
+        check('disabled fails even with fail_mode=open', 'disabled' in e.message, e.message[:80])
+    check('and still creates nothing', not gh.creates, str(gh.creates))
+
     await test_live_race()
 
     print("\n" + "=" * 60)
