@@ -38,6 +38,11 @@ class ToolResponse(BaseModel):
 
     def to_dict(self):
         d = self.model_dump()
+        # Only a successful response gets a defaulted result set. Doing this for
+        # a failed one fabricates a well-formed empty search out of an outage,
+        # which a consumer cannot tell apart from a genuine zero-result search.
+        if not d.get('success'):
+            return d
         if d.get('tool_output') is None:
             d['tool_output'] = {"results": []}
         elif isinstance(d.get('tool_output'), dict) and 'results' not in d['tool_output']:
