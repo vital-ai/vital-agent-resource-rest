@@ -10,8 +10,29 @@ from vital_agent_resource_app.tools.place_search.models import PlaceDetails
 
 logger = logging.getLogger("VitalAgentContainerLogger")
 
+# Text search already returns everything else; these four need Place Details.
+DETAILS_FIELDS = ["formatted_phone_number", "website", "url", "vicinity"]
+
+# Details is billed per call, and a broad query returns up to 20 places, most of
+# which the caller discards. 1-2 risks missing the right listing when the
+# business is not ranked first.
+DEFAULT_DETAILS_LIMIT = 3
+
 
 class PlaceSearchTool(AbstractTool):
+
+    def _details_limit(self) -> int:
+        value = (self.config or {}).get("details_limit")
+        if value is None:
+            return DEFAULT_DETAILS_LIMIT
+        try:
+            limit = int(value)
+            if limit < 0:
+                raise ValueError(value)
+            return limit
+        except (TypeError, ValueError):
+            logger.warning(f"Invalid place_search details_limit {value!r}; using {DEFAULT_DETAILS_LIMIT}")
+            return DEFAULT_DETAILS_LIMIT
 
     def get_examples(self) -> List[Dict[str, Any]]:
         """Return list of example requests for Place Search tool"""
@@ -64,6 +85,9 @@ class PlaceSearchTool(AbstractTool):
 
         results = search_response.get("results", [])
 
+        details_limit = self._details_limit()
+        details_calls = 0
+
         places = []
 
         for result in results:
@@ -71,30 +95,33 @@ class PlaceSearchTool(AbstractTool):
             if not place_id:
                 continue
 
-            place_details = gmaps.place(place_id=place_id, fields=[
-                "address_component", "adr_address", "business_status", "formatted_address",
-                "geometry", "icon", "name", "photo", "place_id", "plus_code", "type",
-                "url", "utc_offset", "vicinity", "formatted_phone_number", "website"
-            ])
+            # Only the top results get Details. A failure there costs that
+            # result its contact fields, not the whole search.
+            details = {}
+            if details_calls < details_limit:
+                details_calls += 1
+                try:
+                    details = gmaps.place(place_id=place_id, fields=DETAILS_FIELDS).get("result", {})
+                except Exception as e:
+                    logger.warning(f"Place Details failed for {place_id}: {e}")
 
-            details = place_details.get("result", {})
-
-            lat = details.get("geometry", {}).get("location", {}).get("lat", None)
-            lon = details.get("geometry", {}).get("location", {}).get("lng", None)
+            location = result.get("geometry", {}).get("location", {})
 
             place = PlaceDetails(
                 name=result.get('name', "Unknown"),
                 address=result.get('formatted_address', "Unknown"),
-                place_id=result.get('place_id', "Unknown"),
-                latitude=lat if lat is not None else None,
-                longitude=lon if lon is not None else None,
-                business_status=details.get("business_status", None),
-                icon=details.get("icon", None),
-                types=details.get("types", []),
-                url=details.get("url", None),
-                vicinity=details.get("vicinity", None),
-                formatted_phone_number=details.get("formatted_phone_number", None),
-                website=details.get("website", None)
+                place_id=place_id,
+                latitude=location.get("lat"),
+                longitude=location.get("lng"),
+                business_status=result.get("business_status"),
+                icon=result.get("icon"),
+                types=result.get("types", []),
+                rating=result.get("rating"),
+                user_ratings_total=result.get("user_ratings_total"),
+                url=details.get("url"),
+                vicinity=details.get("vicinity"),
+                formatted_phone_number=details.get("formatted_phone_number"),
+                website=details.get("website")
             )
 
             places.append(place)
