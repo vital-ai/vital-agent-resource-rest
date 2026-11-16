@@ -282,11 +282,19 @@ app_config = config.get('vital_agent_resource_app', {})
 
 runpod_config = app_config.get('runpod', {})
 
-runpod_api_key = runpod_config.get('runpod_api_key', "")
+runpod_api_key = runpod_config.get('runpod_api_key') or None
 
-logging.info("starting cluster manager.")
-
-cluster_mgr = VitalLLMClusterMgr(runpod_api_key=runpod_api_key)
+# RunPod is optional. Without a key the cluster manager is not built at all:
+# constructing it calls RunPod immediately (logging "Error getting running pods"
+# on every startup) and starts a thread that polls RunPod every 5 minutes for
+# nothing. /v1/completions then reports that LLM serving is not configured.
+if runpod_api_key:
+    logging.info("RunPod: starting cluster manager.")
+    cluster_mgr = VitalLLMClusterMgr(runpod_api_key=runpod_api_key)
+else:
+    logger.info("RunPod: not configured; cluster manager not started, "
+                "/v1/completions will report LLM serving is not configured")
+    cluster_mgr = None
 
 # for direct use of the LLMs via the public api
 # the path should be:

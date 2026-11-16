@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Union, AsyncGenerator
+from typing import Optional, Union, AsyncGenerator
 import httpx
 from fastapi import Request
 from vital_llm_cluster_mgr.vital_llm_cluster_mgr import VitalLLMClusterMgr
@@ -10,8 +10,16 @@ class LLMEndpoint:
 
     @classmethod
     async def handle_llm_request(
-            cls, cluster_mgr: VitalLLMClusterMgr, raw_request: Request
+            cls, cluster_mgr: Optional[VitalLLMClusterMgr], raw_request: Request
     ) -> Union[AsyncGenerator[str, None], CompletionResponse, ErrorResponse]:
+        # RunPod is optional; with no cluster manager there is nothing to route to.
+        if cluster_mgr is None:
+            return ErrorResponse(
+                message="LLM serving is not configured (no RunPod API key)",
+                type="not_configured",
+                code=404,
+            )
+
         try:
             json_body = await raw_request.json()
         except Exception as e:
