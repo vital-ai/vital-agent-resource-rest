@@ -143,7 +143,7 @@ async def test_live_race():
 
     Skips without cluster access, so it is CI-safe.
     """
-    print("\n6. Abandoned-reservation race (live)")
+    print("\n7. Abandoned-reservation race (live)")
 
     import os as _os
     from dotenv import load_dotenv
@@ -386,6 +386,42 @@ async def main():
     except GitHubToolError as e:
         check('disabled fails even with fail_mode=open', 'disabled' in e.message, e.message[:80])
     check('and still creates nothing', not gh.creates, str(gh.creates))
+
+    print("\n6. Environment isolation")
+    saved_env = os.environ.get('VITAL_ENV')
+    try:
+        os.environ['VITAL_ENV'] = 'PROD'
+        prod_key, prod_marker = build_key('o', 'r', 'evt-env'), build_marker('evt-env')
+        check('PROD keys keep the deployed format, so no reservation is orphaned',
+              prod_key.startswith('gh:idem:v1:o/r:'), prod_key)
+        check('PROD markers keep the deployed format, so filed issues still match',
+              prod_marker.startswith('<!-- idempotency-key: ') and ':' not in
+              prod_marker[len('<!-- idempotency-key: '):], prod_marker)
+
+        os.environ['VITAL_ENV'] = 'DEV'
+        dev_key, dev_marker = build_key('o', 'r', 'evt-env'), build_marker('evt-env')
+        check('DEV keys are namespaced apart from PROD',
+              dev_key == f"dev:{prod_key}", dev_key)
+        check('DEV markers differ from PROD markers', dev_marker != prod_marker, dev_marker)
+
+        # A DEV request facing a PROD reservation for the same caller key must
+        # not see it: it reserves its own key and creates.
+        r = StubRedis(); redis_client._client = r
+        await r.set(prod_key, 'pending:prod-request', px=60000)
+        tool, gh = make_tool()
+        out = await tool._create_issue(create_input('evt-env'))
+        check('a PROD reservation does not block DEV', out.created is True,
+              str(out.api_error))
+        check('and DEV never touches the PROD key',
+              (await r.get(prod_key)) == 'pending:prod-request', str(await r.get(prod_key)))
+        check('the DEV issue carries the DEV marker',
+              dev_marker in (gh.bodies[0] or '') and prod_marker not in (gh.bodies[0] or ''),
+              str(gh.bodies[0]))
+    finally:
+        if saved_env is None:
+            os.environ.pop('VITAL_ENV', None)
+        else:
+            os.environ['VITAL_ENV'] = saved_env
 
     await test_live_race()
 

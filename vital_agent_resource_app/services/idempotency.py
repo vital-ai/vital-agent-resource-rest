@@ -17,6 +17,7 @@ second consumer does not have to reimplement it.
 
 import hashlib
 import logging
+import os
 from typing import Any, Optional, Tuple
 
 logger = logging.getLogger("VitalAgentContainerLogger")
@@ -38,17 +39,37 @@ def digest(idempotency_key: str) -> str:
     return hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:32]
 
 
+def env_namespace() -> str:
+    """Namespace that keeps each environment's guarantees to itself.
+
+    Empty for PROD, so the deployed key and marker formats are unchanged and no
+    reservation or issue already filed is orphaned. Every other environment gets
+    its own, so a DEV run pointed at a shared Redis or repository can neither
+    claim nor adopt the deployed service's keys. VITAL_ENV is read per call, like
+    the rest of the config, so it cannot go stale.
+    """
+    env = os.getenv('VITAL_ENV', 'DEV').strip().upper()
+    return '' if env == 'PROD' else f"{env.lower()}:"
+
+
 def build_key(owner: str, repo: str, idempotency_key: str) -> str:
     """Redis key for one (repo, caller key) pair.
 
     Repo-scoped because the same marker in two repositories is two legitimate
     issues; a global namespace would silently suppress the second.
+    Environment-scoped by env_namespace().
     """
-    return f"{KEY_PREFIX}:{owner}/{repo}:{digest(idempotency_key)}"
+    return f"{env_namespace()}{KEY_PREFIX}:{owner}/{repo}:{digest(idempotency_key)}"
 
 
 def build_marker(idempotency_key: str) -> str:
-    return MARKER_TEMPLATE.format(digest=digest(idempotency_key))
+    """Marker for the issue body, environment-scoped like the key.
+
+    The stale-reservation scan matches whole lines, so a DEV marker
+    (`dev:<digest>`) never matches a PROD one and DEV cannot adopt an issue the
+    deployed service filed in the same repository.
+    """
+    return MARKER_TEMPLATE.format(digest=f"{env_namespace()}{digest(idempotency_key)}")
 
 
 class IdempotencyStore:
