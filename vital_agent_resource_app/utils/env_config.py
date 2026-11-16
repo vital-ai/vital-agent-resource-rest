@@ -18,7 +18,7 @@ class EnvConfigLoader:
     Examples:
         DEV__TOOL__LOOP_LOOKUP__API_KEY → tools[loop_lookup_tool]['api_key']
         DEV__TOOL__LOOP_MESSAGE__AUTHORIZATION_KEY → tools[loop_message_tool]['authorization_key']
-        DEV__RUNPOD__API_KEY → runpod['runpod_api_key']
+        DEV__RUNPOD__API_KEY → runpod['runpod_api_key']  (special-cased; see _runpod_key)
         DEV__MEMORYDB__URL → memorydb['url']
         DEV__JWT__ENABLED → jwt config (handled separately)
     """
@@ -185,16 +185,26 @@ class EnvConfigLoader:
         return tools
     
     @staticmethod
+    def _runpod_key(env_key: str) -> str:
+        """Config key for a {ENV}__RUNPOD__* variable.
+
+        API_KEY maps to 'runpod_api_key', the name the YAML config and app.py
+        use. Lower-casing it to 'api_key', as every other key is, meant the key
+        never reached the cluster manager and RunPod was off even when set.
+        """
+        key = env_key.lower()
+        return 'runpod_api_key' if key == 'api_key' else key
+
+    @staticmethod
     def _get_runpod_config() -> Dict[str, str]:
         """Get RunPod configuration"""
         env = EnvConfigLoader.get_env()
         prefix = f"{env}__RUNPOD__"
-        
+
         config = {}
         for key, value in os.environ.items():
             if key.startswith(prefix):
-                config_key = key[len(prefix):].lower()
-                config[config_key] = value
+                config[EnvConfigLoader._runpod_key(key[len(prefix):])] = value
         
         return config
     
@@ -265,8 +275,7 @@ class EnvConfigLoader:
             elif section == 'RUNPOD':
                 # Format: DEV__RUNPOD__CONFIG_KEY
                 if len(parts) >= 2:
-                    config_key = '__'.join(parts[1:])
-                    runpod_config[config_key.lower()] = value
+                    runpod_config[EnvConfigLoader._runpod_key('__'.join(parts[1:]))] = value
 
             elif section == 'MEMORYDB':
                 # Format: DEV__MEMORYDB__CONFIG_KEY

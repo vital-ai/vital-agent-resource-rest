@@ -289,7 +289,7 @@ runpod_api_key = runpod_config.get('runpod_api_key') or None
 # on every startup) and starts a thread that polls RunPod every 5 minutes for
 # nothing. /v1/completions then reports that LLM serving is not configured.
 if runpod_api_key:
-    logging.info("RunPod: starting cluster manager.")
+    logger.info("RunPod: API key configured; starting cluster manager")
     cluster_mgr = VitalLLMClusterMgr(runpod_api_key=runpod_api_key)
 else:
     logger.info("RunPod: not configured; cluster manager not started, "
