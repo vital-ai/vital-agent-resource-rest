@@ -110,6 +110,10 @@
           "value": "none"
         },
         {
+          "name": "PROD__MEMORYDB__CLUSTER",
+          "value": "true"
+        },
+        {
           "name": "PROD__TOOL__GITHUB__IDEMPOTENCY_ENABLED",
           "value": "false"
         }

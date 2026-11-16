@@ -6,8 +6,9 @@ opts in separately. These tests cover that contract: an unconfigured service mus
 be inert rather than fatal, and a configured one must provide the primitives the
 idempotency design rests on.
 
-Runs against the real cluster when {ENV}__MEMORYDB__URL is set and reachable, and
-skips the live section otherwise, so it is safe in CI without VPC access.
+Runs against the configured server (locally, cardiff-redis-streams) when
+{ENV}__MEMORYDB__URL is set and reachable, and skips the live section otherwise,
+so it is safe in CI.
 """
 
 import asyncio
@@ -69,9 +70,41 @@ async def test_config_is_global():
           EnvConfigLoader.get_memorydb_config().get('url') == cfg['memorydb'].get('url'))
 
 
+async def test_client_selection():
+    """The client type and TLS follow the URL; the deployed cluster stays a cluster."""
+    print("\n3. Client selection")
+    from redis.asyncio import Redis, RedisCluster
+
+    def pool_kwargs(c):
+        return c.connection_pool.connection_kwargs
+
+    c = redis_client.init_redis({'url': 'redis://host.docker.internal:6381/0'})
+    check('a standalone URL gets a standalone client',
+          type(c) is Redis, type(c).__name__)
+    check('redis:// is plain TCP',
+          'ssl_cert_reqs' not in pool_kwargs(c), str(pool_kwargs(c)))
+    check('the db in the path is honoured',
+          pool_kwargs(redis_client.init_redis(
+              {'url': 'redis://localhost:6381/3'})).get('db') == 3)
+
+    c = redis_client.init_redis({'url': 'rediss://localhost:6381/0'})
+    check('rediss:// turns TLS on without an explicit SSL flag',
+          'ssl_cert_reqs' in pool_kwargs(c), str(pool_kwargs(c)))
+
+    mdb = 'rediss://u:p@clustercfg.example.memorydb.us-east-1.amazonaws.com:6379'
+    check('a MemoryDB clustercfg endpoint gets RedisCluster',
+          isinstance(redis_client.init_redis({'url': mdb, 'ssl': 'true'}), RedisCluster))
+    check('CLUSTER=true forces RedisCluster on any host',
+          isinstance(redis_client.init_redis(
+              {'url': 'rediss://u:p@memdb.internal:6379', 'cluster': 'true'}), RedisCluster))
+    check('CLUSTER=false forces standalone even on a clustercfg host',
+          type(redis_client.init_redis({'url': mdb, 'cluster': 'false'})) is Redis)
+    await redis_client.close_redis()
+
+
 async def test_live():
-    """Primitives the idempotency design depends on, against the real cluster."""
-    print("\n3. Live cluster")
+    """Primitives the idempotency design depends on, against the configured server."""
+    print("\n4. Live server")
 
     cfg = EnvConfigLoader.get_memorydb_config()
     if not cfg.get('url'):
@@ -80,7 +113,7 @@ async def test_live():
 
     redis_client.init_redis(cfg)
     if not await redis_client.ping():
-        print("  SKIP  cluster not reachable from here (VPC access required)")
+        print("  SKIP  server not reachable from here")
         await redis_client.close_redis()
         return
 
@@ -122,6 +155,7 @@ async def main():
     print("=" * 60)
     await test_optional()
     await test_config_is_global()
+    await test_client_selection()
     await test_live()
     print("\n" + "=" * 60)
     print(f"Passed: {len(PASSED)}   Failed: {len(FAILED)}")
